@@ -30,14 +30,22 @@ enum TorrentCommand: String, Sendable {
 
 struct TorrentAddOptions: Sendable {
     var savePath = ""
+    var downloadPathEnabled = false
+    var downloadPath = ""
     var category = ""
     var tags = ""
+    var rename = ""
     var stopped = false
     var sequential = false
     var firstLastPiece = false
     var automaticManagement = false
+    var addToQueueTop = false
+    var seedMode = false
+    var stopCondition = "None"
+    var contentLayout = "Original"
     var downloadLimitKiB = 0
     var uploadLimitKiB = 0
+    var filePriorities: [Int]?
 
     var form: [String: String] {
         var values = [
@@ -46,10 +54,20 @@ struct TorrentAddOptions: Sendable {
             "sequentialDownload": sequential ? "true" : "false",
             "firstLastPiecePrio": firstLastPiece ? "true" : "false",
             "autoTMM": automaticManagement ? "true" : "false",
+            "addToTopOfQueue": addToQueueTop ? "true" : "false",
+            "seedMode": seedMode ? "true" : "false",
+            "stopCondition": stopCondition,
+            "contentLayout": contentLayout,
             "dlLimit": "\(downloadLimitKiB * 1024)",
             "upLimit": "\(uploadLimitKiB * 1024)"
         ]
+        if let filePriorities { values["filePriorities"] = filePriorities.map(String.init).joined(separator: ",") }
         if !savePath.isEmpty { values["savepath"] = savePath }
+        if !rename.isEmpty { values["rename"] = rename }
+        if downloadPathEnabled {
+            values["useDownloadPath"] = "true"
+            values["downloadPath"] = downloadPath
+        }
         return values
     }
 }
@@ -88,7 +106,8 @@ actor QBittorrentAPI {
         let responses = try JSONDecoder().decode([TorrentResponse].self, from: data)
         let raw = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
         return responses.enumerated().map { index, response in
-            response.torrent(extra: index < raw.count ? TorrentResponse.formatColumns(raw[index]) : [:])
+            let row = index < raw.count ? raw[index] : [:]
+            return response.torrent(extra: TorrentResponse.formatColumns(row), sortNumbers: TorrentResponse.numericColumns(row))
         }
     }
 
@@ -108,8 +127,12 @@ actor QBittorrentAPI {
         return try JSONDecoder().decode(ServerStatisticsResponse.self, from: data).server_state
     }
 
-    func mainLog(after id: Int) async throws -> [LogEntry] {
-        let data = try await request("log/main", query: ["last_known_id": "\(id)"])
+    func mainLog(after id: Int, normal: Bool = true, info: Bool = true, warning: Bool = true, critical: Bool = true) async throws -> [LogEntry] {
+        let data = try await request("log/main", query: [
+            "last_known_id": "\(id)", "normal": normal ? "true" : "false",
+            "info": info ? "true" : "false", "warning": warning ? "true" : "false",
+            "critical": critical ? "true" : "false"
+        ])
         return try JSONDecoder().decode([LogEntry].self, from: data)
     }
 
@@ -126,15 +149,24 @@ actor QBittorrentAPI {
         try await request("app/preferences")
     }
 
-    func createTorrent(sourcePath: String, outputPath: String, trackers: String, comment: String, isPrivate: Bool, format: String) async throws -> String {
+    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
+        let trackerList = trackers.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let seedList = webSeeds.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "|"))
+        let encodedTrackers = trackerList.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }.joined(separator: "|")
+        let encodedSeeds = seedList.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }.joined(separator: "|")
         let data = try await request("torrentcreator/addTask", method: "POST", form: [
             "sourcePath": sourcePath,
             "torrentFilePath": outputPath,
-            "trackers": trackers.split(whereSeparator: \.isNewline).map { String($0).addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? String($0) }.joined(separator: "|"),
+            "trackers": encodedTrackers,
+            "urlSeeds": encodedSeeds,
             "comment": comment,
+            "source": source,
+            "pieceSize": "\(pieceSize)",
+            "ignoreDotfiles": ignoreDotfiles ? "true" : "false",
             "private": isPrivate ? "true" : "false",
             "format": format,
-            "startSeeding": "false"
+            "startSeeding": startSeeding ? "true" : "false"
         ])
         return try JSONDecoder().decode(TorrentCreationResponse.self, from: data).taskID
     }
@@ -143,6 +175,19 @@ actor QBittorrentAPI {
         let data = try await request("torrentcreator/status", query: ["taskID": taskID])
         guard let result = try JSONDecoder().decode([TorrentCreationStatus].self, from: data).first else { throw APIError.badResponse }
         return result
+    }
+
+    func torrentCreationTasks() async throws -> [TorrentCreationStatus] {
+        let data = try await request("torrentcreator/status")
+        return try JSONDecoder().decode([TorrentCreationStatus].self, from: data)
+    }
+
+    func deleteTorrentCreationTask(_ taskID: String) async throws {
+        _ = try await request("torrentcreator/deleteTask", method: "POST", form: ["taskID": taskID])
+    }
+
+    func createdTorrentFile(taskID: String) async throws -> Data {
+        try await request("torrentcreator/torrentFile", query: ["taskID": taskID])
     }
 
     func cookies() async throws -> [BackendCookie] {
@@ -198,6 +243,12 @@ actor QBittorrentAPI {
     func editTracker(hash: String, url: String, newURL: String) async throws {
         _ = try await request("torrents/editTracker", method: "POST", form: [
             "hash": hash, "url": url, "newUrl": newURL
+        ])
+    }
+
+    func moveTracker(hash: String, url: String, tier: Int) async throws {
+        _ = try await request("torrents/editTracker", method: "POST", form: [
+            "hash": hash, "url": url, "tier": "\(tier)"
         ])
     }
 
@@ -343,8 +394,24 @@ actor QBittorrentAPI {
         return feeds.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
-    func addRSSFeed(_ url: String) async throws {
-        _ = try await request("rss/addFeed", method: "POST", form: ["url": url, "path": url])
+    func rssFolders() async throws -> [RSSFolder] {
+        let data = try await request("rss/items")
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw APIError.badResponse }
+        var folders: [RSSFolder] = []
+        func collect(_ node: [String: Any], path: String) {
+            for (name, value) in node {
+                guard let entry = value as? [String: Any], entry["url"] == nil else { continue }
+                let itemPath = path.isEmpty ? name : "\(path)/\(name)"
+                folders.append(RSSFolder(path: itemPath, title: name))
+                collect(entry, path: itemPath)
+            }
+        }
+        collect(root, path: "")
+        return folders.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    func addRSSFeed(_ url: String, path: String? = nil) async throws {
+        _ = try await request("rss/addFeed", method: "POST", form: ["url": url, "path": path ?? url])
     }
 
     func markRSSArticleRead(path: String, articleID: String) async throws {
@@ -369,6 +436,42 @@ actor QBittorrentAPI {
 
     func addRSSFolder(path: String) async throws {
         _ = try await request("rss/addFolder", method: "POST", form: ["path": path])
+    }
+
+    func moveRSSItem(path: String, to destination: String) async throws {
+        _ = try await request("rss/moveItem", method: "POST", form: ["itemPath": path, "destPath": destination])
+    }
+
+    func rssRulesData() async throws -> Data { try await request("rss/rules") }
+
+    func exportRSSRules() async throws -> Data { try await request("rss/exportRules") }
+
+    func importRSSRules(_ data: Data) async throws {
+        let boundary = "qBitX-RSS-\(UUID().uuidString)"
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"rules\"; filename=\"rules.json\"\r\nContent-Type: application/json\r\n\r\n".utf8)
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        _ = try await request("rss/importRules", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+    }
+
+    func setRSSRule(name: String, definition: String) async throws {
+        _ = try await request("rss/setRule", method: "POST", form: ["ruleName": name, "ruleDef": definition])
+    }
+
+    func renameRSSRule(_ name: String, to newName: String) async throws {
+        _ = try await request("rss/renameRule", method: "POST", form: ["ruleName": name, "newRuleName": newName])
+    }
+
+    func cloneRSSRule(_ name: String, as newName: String) async throws {
+        _ = try await request("rss/cloneRule", method: "POST", form: ["sourceName": name, "cloneName": newName])
+    }
+
+    func removeRSSRule(_ name: String) async throws {
+        _ = try await request("rss/removeRule", method: "POST", form: ["ruleName": name])
+    }
+
+    func rssRuleMatches(_ name: String) async throws -> Data {
+        try await request("rss/matchingArticles", query: ["ruleName": name])
     }
 
     func start(_ hash: String) async throws {
@@ -398,6 +501,22 @@ actor QBittorrentAPI {
         ])
     }
 
+    func setTorrentDownloadLimit(hashes: [String], kibPerSecond: Int64) async throws {
+        _ = try await request("torrents/setDownloadLimit", method: "POST", form: ["hashes": hashes.joined(separator: "|"), "limit": "\(kibPerSecond * 1024)"])
+    }
+
+    func setTorrentUploadLimit(hashes: [String], kibPerSecond: Int64) async throws {
+        _ = try await request("torrents/setUploadLimit", method: "POST", form: ["hashes": hashes.joined(separator: "|"), "limit": "\(kibPerSecond * 1024)"])
+    }
+
+    func setShareLimits(hashes: [String], ratio: Double, seedingMinutes: Int, inactiveMinutes: Int, action: String, mode: String) async throws {
+        _ = try await request("torrents/setShareLimits", method: "POST", form: [
+            "hashes": hashes.joined(separator: "|"), "ratioLimit": "\(ratio)",
+            "seedingTimeLimit": "\(seedingMinutes)", "inactiveSeedingTimeLimit": "\(inactiveMinutes)",
+            "shareLimitAction": action, "shareLimitsMode": mode
+        ])
+    }
+
     func rename(_ hash: String, to name: String) async throws {
         _ = try await request("torrents/rename", method: "POST", form: ["hash": hash, "name": name])
     }
@@ -412,6 +531,39 @@ actor QBittorrentAPI {
         let categories = try JSONDecoder().decode([String: CategoryResponse].self, from: data)
         guard categories[name] == nil else { return }
         _ = try await request("torrents/createCategory", method: "POST", form: ["category": name])
+    }
+
+    func categoriesData() async throws -> Data { try await request("torrents/categories") }
+    func tagsData() async throws -> Data { try await request("torrents/tags") }
+
+    func createCategory(_ name: String, savePath: String, downloadPathEnabled: Bool, downloadPath: String, ratioLimit: String, seedingMinutes: String, inactiveMinutes: String, mode: String, action: String) async throws {
+        _ = try await request("torrents/createCategory", method: "POST", form: categoryForm(name: name, savePath: savePath, downloadPathEnabled: downloadPathEnabled, downloadPath: downloadPath, ratioLimit: ratioLimit, seedingMinutes: seedingMinutes, inactiveMinutes: inactiveMinutes, mode: mode, action: action))
+    }
+
+    func editCategory(_ name: String, savePath: String, downloadPathEnabled: Bool, downloadPath: String, ratioLimit: String, seedingMinutes: String, inactiveMinutes: String, mode: String, action: String) async throws {
+        _ = try await request("torrents/editCategory", method: "POST", form: categoryForm(name: name, savePath: savePath, downloadPathEnabled: downloadPathEnabled, downloadPath: downloadPath, ratioLimit: ratioLimit, seedingMinutes: seedingMinutes, inactiveMinutes: inactiveMinutes, mode: mode, action: action))
+    }
+
+    private func categoryForm(name: String, savePath: String, downloadPathEnabled: Bool, downloadPath: String, ratioLimit: String, seedingMinutes: String, inactiveMinutes: String, mode: String, action: String) -> [String: String] {
+        [
+            "category": name, "savePath": savePath,
+            "downloadPathEnabled": downloadPathEnabled ? "true" : "false", "downloadPath": downloadPath,
+            "ratioLimit": ratioLimit, "seedingTimeLimit": seedingMinutes,
+            "inactiveSeedingTimeLimit": inactiveMinutes, "shareLimitsMode": mode, "shareLimitAction": action
+        ]
+    }
+
+    func removeCategory(_ name: String) async throws {
+        _ = try await request("torrents/removeCategories", method: "POST", form: ["categories": name])
+    }
+
+    func createTags(_ names: [String]) async throws {
+        guard !names.isEmpty else { return }
+        _ = try await request("torrents/createTags", method: "POST", form: ["tags": names.joined(separator: ",")])
+    }
+
+    func removeTag(_ name: String) async throws {
+        _ = try await request("torrents/deleteTags", method: "POST", form: ["tags": name])
     }
 
     func remove(_ hash: String, deleteFiles: Bool) async throws {
@@ -447,6 +599,32 @@ actor QBittorrentAPI {
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         let result = try await request("torrents/add", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
         try checkAddResult(result)
+    }
+
+    func parseTorrentMetadata(file data: Data, filename: String) async throws -> TorrentMetadata {
+        let boundary = "qBitX-\(UUID().uuidString)"
+        var body = Data()
+        let safeFilename = filename.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"torrents\"; filename=\"\(safeFilename)\"\r\nContent-Type: application/x-bittorrent\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        let response = try await request("torrents/parseMetadata", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+        guard let metadata = try JSONDecoder().decode([TorrentMetadata].self, from: response).first else { throw APIError.badResponse }
+        return metadata
+    }
+
+    func fetchTorrentMetadata(source: String) async throws -> TorrentMetadata {
+        for _ in 0..<60 {
+            let response = try await request("torrents/fetchMetadata", method: "POST", form: ["source": source])
+            let metadata = try JSONDecoder().decode(TorrentMetadata.self, from: response)
+            if metadata.info != nil { return metadata }
+            try await Task.sleep(for: .seconds(1))
+        }
+        throw APIError.server(status: 408, message: "Timed out while retrieving torrent metadata.")
+    }
+
+    func saveTorrentMetadata(source: String) async throws -> Data {
+        try await request("torrents/saveMetadata", method: "POST", form: ["source": source])
     }
 
     private func checkAddResult(_ data: Data) throws {
@@ -522,7 +700,7 @@ private struct TorrentResponse: Decodable {
     let auto_tmm: Bool?
     let super_seeding: Bool?
 
-    func torrent(extra: [String: String]) -> Torrent {
+    func torrent(extra: [String: String], sortNumbers: [String: Double]) -> Torrent {
         Torrent(
             id: hash,
             name: name,
@@ -538,13 +716,15 @@ private struct TorrentResponse: Decodable {
             etaSeconds: eta ?? -1,
             ratio: ratio ?? 0,
             savePath: save_path ?? "",
+            rawState: state,
             state: TorrentState(apiValue: state),
             forceStart: force_start ?? false,
             sequentialDownload: seq_dl ?? false,
             firstLastPiecePriority: f_l_piece_prio ?? false,
             automaticManagement: auto_tmm ?? false,
             superSeeding: super_seeding ?? false,
-            extra: extra
+            extra: extra,
+            sortNumbers: sortNumbers
         )
     }
 
@@ -576,6 +756,13 @@ private struct TorrentResponse: Decodable {
         }
         return values
     }
+
+    static func numericColumns(_ raw: [String: Any]) -> [String: Double] {
+        raw.compactMapValues { value in
+            guard let number = value as? NSNumber else { return nil }
+            return number.doubleValue
+        }
+    }
 }
 
 private struct TransferResponse: Decodable {
@@ -583,10 +770,6 @@ private struct TransferResponse: Decodable {
     let up_info_speed: Int64?
     let dht_nodes: Int?
     let connection_status: String?
-}
-
-private struct ServerStatisticsResponse: Decodable {
-    let server_state: ServerStatistics
 }
 
 struct ServerStatistics: Decodable, Sendable {
@@ -599,7 +782,12 @@ struct ServerStatistics: Decodable, Sendable {
     let total_peer_connections: Int?
     let global_ratio: String?
     let read_cache_hits: String?
+    let total_buffers_size: Int64?
+    let write_cache_overload: String?
+    let read_cache_overload: String?
     let queued_io_jobs: Int?
+    let average_time_queue: Double?
+    let total_queued_size: Int64?
     let queued_tracker_announces: Int?
     let request_latency: Int?
 }
@@ -649,6 +837,7 @@ struct TorrentProperties: Decodable, Sendable {
 
 struct TorrentTracker: Decodable, Identifiable, Sendable {
     let url: String
+    let tier: Int?
     let status: Int?
     let num_peers: Int?
     let num_seeds: Int?
@@ -674,6 +863,10 @@ private struct PeerSyncResponse: Decodable {
     let peers: [String: TorrentPeer]?
 }
 
+private struct ServerStatisticsResponse: Decodable {
+    let server_state: ServerStatistics
+}
+
 struct TorrentPeer: Decodable, Identifiable, Sendable {
     let ip: String
     let port: Int?
@@ -683,6 +876,16 @@ struct TorrentPeer: Decodable, Identifiable, Sendable {
     let up_speed: Int64?
     let country: String?
     let country_code: String?
+    let peer_id_client: String?
+    let connection: String?
+    let flags: String?
+    let flags_desc: String?
+    let downloaded: Int64?
+    let uploaded: Int64?
+    let relevance: Double?
+    let contribution: Double?
+    let files: String?
+    let host_name: String?
     var id: String { "\(ip):\(port ?? 0)" }
     var countryName: String { country.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown" }
 
@@ -736,6 +939,12 @@ struct RSSFeed: Identifiable, Sendable {
     var id: String { path }
 }
 
+struct RSSFolder: Identifiable, Sendable {
+    let path: String
+    let title: String
+    var id: String { path }
+}
+
 struct RSSArticle: Identifiable, Sendable {
     let id: String
     let title: String
@@ -751,13 +960,66 @@ private struct AddTorrentResponse: Decodable {
     let pending_count: Int
 }
 
+struct TorrentMetadata: Decodable, Sendable {
+    let id: String?
+    let infohash_v1: String?
+    let infohash_v2: String?
+    let info: TorrentMetadataInfo?
+    let comment: String?
+    let creation_date: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case id = "hash"
+        case infohash_v1, infohash_v2, info, comment, creation_date
+    }
+
+    var magnetURI: String? {
+        var items: [URLQueryItem] = []
+        if let infohash_v1, !infohash_v1.isEmpty { items.append(URLQueryItem(name: "xt", value: "urn:btih:\(infohash_v1)")) }
+        if let infohash_v2, !infohash_v2.isEmpty {
+            let hash = infohash_v2.hasPrefix("1220") ? infohash_v2 : "1220\(infohash_v2)"
+            items.append(URLQueryItem(name: "xt", value: "urn:btmh:\(hash)"))
+        }
+        if let name = info?.name { items.append(URLQueryItem(name: "dn", value: name)) }
+        guard !items.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "magnet"
+        components.queryItems = items
+        return components.string
+    }
+}
+
+struct TorrentMetadataInfo: Decodable, Sendable {
+    let name: String?
+    let files: [TorrentMetadataFile]?
+    let length: Int64?
+    let piece_length: Int64?
+    let pieces_num: Int?
+    let privateTorrent: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case name, files, length, piece_length, pieces_num
+        case privateTorrent = "private"
+    }
+}
+
+struct TorrentMetadataFile: Decodable, Identifiable, Sendable {
+    let path: String
+    let length: Int64
+    let priority: Int?
+    var id: String { path }
+}
+
 private struct TorrentCreationResponse: Decodable { let taskID: String }
 
-struct TorrentCreationStatus: Decodable, Sendable {
+struct TorrentCreationStatus: Decodable, Identifiable, Sendable {
+    let taskID: String
+    let sourcePath: String?
     let status: String
     let progress: Double?
     let errorMessage: String?
     let torrentFilePath: String?
+    var id: String { taskID }
 }
 
 struct BackendCookie: Codable, Identifiable, Sendable {

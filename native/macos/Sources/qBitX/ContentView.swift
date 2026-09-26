@@ -1,6 +1,7 @@
 import SwiftUI
 import Charts
 import UniformTypeIdentifiers
+import LocalAuthentication
 
 private enum MainTab: String, CaseIterable, Identifiable {
     case transfers = "Transfers"
@@ -19,15 +20,64 @@ private enum DetailTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-private enum TorrentSort: String, CaseIterable, Identifiable {
-    case name = "Name", size = "Size", progress = "Progress", status = "Status"
-    case seeds = "Seeds", peers = "Peers", downSpeed = "Down Speed", upSpeed = "Up Speed"
-    case eta = "ETA", ratio = "Ratio", category = "Category"
-    var id: String { rawValue }
+private struct TorrentSort: Identifiable, Equatable {
+    let title: String
+    let key: String
+    var id: String { key }
+
+    static let allCases = [
+        TorrentSort(title: "Queue Position", key: "priority"),
+        TorrentSort(title: "Name", key: "name"),
+        TorrentSort(title: "Size", key: "size"),
+        TorrentSort(title: "Total Size", key: "total_size"),
+        TorrentSort(title: "Progress", key: "progress"),
+        TorrentSort(title: "Status", key: "state"),
+        TorrentSort(title: "Seeds", key: "num_seeds"),
+        TorrentSort(title: "Peers", key: "num_leechs"),
+        TorrentSort(title: "Down Speed", key: "dlspeed"),
+        TorrentSort(title: "Up Speed", key: "upspeed"),
+        TorrentSort(title: "ETA", key: "eta"),
+        TorrentSort(title: "Ratio", key: "ratio"),
+        TorrentSort(title: "Popularity", key: "popularity"),
+        TorrentSort(title: "Category", key: "category"),
+        TorrentSort(title: "Tags", key: "tags"),
+        TorrentSort(title: "Added On", key: "added_on"),
+        TorrentSort(title: "Seeding Since", key: "completion_on"),
+        TorrentSort(title: "Tracker", key: "tracker"),
+        TorrentSort(title: "Down Limit", key: "dl_limit"),
+        TorrentSort(title: "Up Limit", key: "up_limit"),
+        TorrentSort(title: "Downloaded", key: "downloaded"),
+        TorrentSort(title: "Uploaded", key: "uploaded"),
+        TorrentSort(title: "Session Downloaded", key: "downloaded_session"),
+        TorrentSort(title: "Session Uploaded", key: "uploaded_session"),
+        TorrentSort(title: "Amount Left", key: "amount_left"),
+        TorrentSort(title: "Active Time", key: "time_active"),
+        TorrentSort(title: "Save Path", key: "save_path"),
+        TorrentSort(title: "Completed", key: "completed"),
+        TorrentSort(title: "Ratio Limit", key: "ratio_limit"),
+        TorrentSort(title: "Last Seen Complete", key: "seen_complete"),
+        TorrentSort(title: "Last Activity", key: "last_activity"),
+        TorrentSort(title: "Availability", key: "availability"),
+        TorrentSort(title: "Download Path", key: "download_path"),
+        TorrentSort(title: "Infohash v1", key: "infohash_v1"),
+        TorrentSort(title: "Infohash v2", key: "infohash_v2"),
+        TorrentSort(title: "Reannounce", key: "reannounce"),
+        TorrentSort(title: "Private", key: "private"),
+        TorrentSort(title: "Created On", key: "creation_date")
+    ]
+
+    static let name = allCases[1]
 }
 
 struct ContentView: View {
     @State private var store = TorrentStore()
+    @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
+    @AppStorage("qBitX.showStatusBar") private var showStatusBar = true
+    @AppStorage("qBitX.showDetailPane") private var showDetailPane = true
+    @AppStorage("qBitX.showToolbarLabels") private var showToolbarLabels = true
+    @AppStorage("qBitX.showSpeedInTitleBar") private var showSpeedInTitleBar = false
+    @AppStorage("qBitX.interfaceLocked") private var interfaceLocked = false
+    @AppStorage("qBitX.downloadCompletionAction") private var downloadCompletionAction = "none"
     @State private var selectedTorrentIDs: Set<String> = []
     @SceneStorage("qBitX.transferColumns") private var columnCustomization = TableColumnCustomization<Torrent>()
     @State private var textAction: TorrentTextAction?
@@ -39,8 +89,12 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var sortField: TorrentSort = .name
     @State private var sortDescending = false
+    @AppStorage("qBitX.speedGraphPeriod") private var speedGraphPeriod = 300
+    @AppStorage("qBitX.speedGraphDownload") private var showDownloadGraph = true
+    @AppStorage("qBitX.speedGraphUpload") private var showUploadGraph = true
     @State private var mainTab: MainTab = .transfers
     @State private var detailTab: DetailTab = .general
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     @State private var showsURLSheet = false
     @State private var showsFileImporter = false
     @State private var pendingTorrentFile: PendingTorrentFile?
@@ -52,6 +106,13 @@ struct ContentView: View {
     @State private var showsExecutionLog = false
     @State private var showsTorrentCreator = false
     @State private var showsCookies = false
+    @State private var torrentOptionsTarget: TorrentOptionsTarget?
+    @State private var showsOrganization = false
+    @State private var showsAbout = false
+    @State private var previewTorrent: Torrent?
+    @State private var authenticationError: String?
+    @State private var incompleteDownloadIDs: Set<String> = []
+    @State private var showsDownloadCompletionAction = false
     @State private var actionError: String?
     @State private var retryID = 0
     @State private var properties: TorrentProperties?
@@ -70,21 +131,39 @@ struct ContentView: View {
                 && (trackerFilter == nil || torrent.tracker == trackerFilter)
                 && (searchText.isEmpty || torrent.name.localizedCaseInsensitiveContains(searchText))
         }.sorted { left, right in
+            let leftNumber = sortNumber(for: sortField.key, torrent: left)
+            let rightNumber = sortNumber(for: sortField.key, torrent: right)
             let result: ComparisonResult
-            switch sortField {
-            case .name: result = left.name.localizedStandardCompare(right.name)
-            case .status: result = left.state.rawValue.localizedStandardCompare(right.state.rawValue)
-            case .category: result = left.category.localizedStandardCompare(right.category)
-            case .size: result = compare(left.sizeBytes, right.sizeBytes)
-            case .progress: result = compare(left.progress, right.progress)
-            case .seeds: result = compare(left.seeds, right.seeds)
-            case .peers: result = compare(left.peers, right.peers)
-            case .downSpeed: result = compare(left.downloadRateBytes, right.downloadRateBytes)
-            case .upSpeed: result = compare(left.uploadRateBytes, right.uploadRateBytes)
-            case .eta: result = compare(left.etaSeconds, right.etaSeconds)
-            case .ratio: result = compare(left.ratio, right.ratio)
+            if let leftNumber, let rightNumber {
+                result = compare(leftNumber, rightNumber)
+            } else {
+                result = sortText(for: sortField.key, torrent: left).localizedStandardCompare(sortText(for: sortField.key, torrent: right))
             }
             return sortDescending ? result == .orderedDescending : result == .orderedAscending
+        }
+    }
+
+    private func sortNumber(for key: String, torrent: Torrent) -> Double? {
+        switch key {
+        case "size": return Double(torrent.sizeBytes)
+        case "progress": return torrent.progress
+        case "num_seeds": return Double(torrent.seeds)
+        case "num_leechs": return Double(torrent.peers)
+        case "dlspeed": return Double(torrent.downloadRateBytes)
+        case "upspeed": return Double(torrent.uploadRateBytes)
+        case "eta": return Double(torrent.etaSeconds)
+        case "ratio": return torrent.ratio
+        case "category": return nil
+        default: return torrent.sortNumbers[key]
+        }
+    }
+
+    private func sortText(for key: String, torrent: Torrent) -> String {
+        switch key {
+        case "name": return torrent.name
+        case "state": return torrent.state.rawValue
+        case "category": return torrent.category
+        default: return torrent.column(key)
         }
     }
 
@@ -105,7 +184,7 @@ struct ContentView: View {
     private var selectedHashes: [String] { selectedTorrentIDs.sorted() }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
             filterSidebar
                 .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 250)
         } detail: {
@@ -114,17 +193,23 @@ struct ContentView: View {
                 Divider()
                 switch mainTab {
                 case .transfers:
-                    VSplitView {
-                        torrentTable.frame(minHeight: 240)
-                        detailsPane.frame(minHeight: 170)
+                    if showDetailPane {
+                        VSplitView {
+                            torrentTable.frame(minHeight: 240)
+                            detailsPane.frame(minHeight: 170)
+                        }
+                    } else {
+                        torrentTable
                     }
                 case .search:
                     SearchPane(store: store)
                 case .rss:
                     RSSPane(store: store)
                 }
-                Divider()
-                statusBar
+                if showStatusBar {
+                    Divider()
+                    statusBar
+                }
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
@@ -135,74 +220,28 @@ struct ContentView: View {
             selectedTorrentIDs.formIntersection(ids)
             if selectedTorrentIDs.isEmpty, let first = ids.first { selectedTorrentIDs = [first] }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button { showsFileImporter = true } label: {
-                    Label("Add Torrent", systemImage: "plus")
-                }
-                .help("Open a .torrent file")
-
-                Button { showsURLSheet = true } label: {
-                    Label("Add URL", systemImage: "link.badge.plus")
-                }
-                .help("Add a magnet link or torrent URL")
-
-                Button(role: .destructive) { showsRemoveConfirmation = true } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .disabled(selectedTorrent == nil)
-
-                Button { runBulkAction { try await store.command(.start, hashes: $0) } } label: {
-                    Label("Start", systemImage: "play.fill")
-                }
-                .disabled(selectedTorrent == nil)
-
-                Button { runBulkAction { try await store.command(.stop, hashes: $0) } } label: {
-                    Label("Stop", systemImage: "pause.fill")
-                }
-                .disabled(selectedTorrent == nil)
-
-                Menu {
-                    Button("Pause Session") { setSessionPaused(true) }
-                    Button("Resume Session") { setSessionPaused(false) }
-                    Divider()
-                    Button("Speed Limits…") { showsSpeedLimits = true }
-                } label: {
-                    Label("Session", systemImage: "pause.circle")
-                }
-
-                Button {
-                    if let path = selectedTorrent?.savePath, !path.isEmpty {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                    }
-                } label: {
-                    Label("Open Destination", systemImage: "folder")
-                }
-                .disabled(selectedTorrent?.savePath.isEmpty ?? true)
-
-                Menu {
-                    Button("qBittorrent Preferences…") { showsBackendPreferences = true }
-                    Button("Connection…") { showsConnectionSettings = true }
-                    Divider()
-                    Button("Create Torrent…") { showsTorrentCreator = true }
-                        .disabled(!store.usesBundledBackend)
-                    Button("Cookies…") { showsCookies = true }
-                    Button("Statistics…") { showsStatistics = true }
-                    Button("Execution Log…") { showsExecutionLog = true }
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                .help("qBittorrent preferences and connection")
-            }
+        .onChange(of: torrents.map(\.progress)) { _, _ in checkDownloadCompletion() }
+        .onAppear { sidebarVisibility = showFiltersSidebar ? .all : .detailOnly; syncWindowTitle() }
+        .onChange(of: showFiltersSidebar) { _, visible in sidebarVisibility = visible ? .all : .detailOnly }
+        .onChange(of: "\(store.transferStatus.downloadText)|\(store.transferStatus.uploadText)|\(showSpeedInTitleBar)") { _, _ in syncWindowTitle() }
+        .overlay {
+            if interfaceLocked { lockedOverlay }
         }
+        .toolbar { toolbarContent }
         .sheet(isPresented: $showsURLSheet) {
-            AddTorrentSheet(file: nil) { url, options in
+            AddTorrentSheet(file: nil, store: store) { url, options in
                 try await store.add(url: url, options: options)
             }
         }
         .sheet(item: $pendingTorrentFile) { file in
-            AddTorrentSheet(file: file) { _, options in
-                try await store.add(file: file.data, filename: file.name, options: options)
+            AddTorrentSheet(file: file, store: store) { source, options in
+                if source.hasPrefix("magnet:") {
+                    try await store.add(url: source, options: options)
+                } else {
+                    var uploadOptions = options
+                    uploadOptions.filePriorities = nil
+                    try await store.add(file: file.data, filename: file.name, options: uploadOptions)
+                }
             }
         }
         .sheet(isPresented: $showsConnectionSettings) {
@@ -214,6 +253,12 @@ struct ContentView: View {
         .sheet(isPresented: $showsExecutionLog) { ExecutionLogView(store: store) }
         .sheet(isPresented: $showsTorrentCreator) { TorrentCreatorView(store: store) }
         .sheet(isPresented: $showsCookies) { CookiesView(store: store) }
+        .sheet(item: $torrentOptionsTarget) { target in TorrentOptionsView(store: store, hashes: target.hashes) }
+        .sheet(item: $previewTorrent) { torrent in
+            TorrentPreviewView(torrent: torrent, store: store) { url in NSWorkspace.shared.open(url) }
+        }
+        .sheet(isPresented: $showsOrganization) { OrganizationView(store: store) }
+        .sheet(isPresented: $showsAbout) { AboutView(serverVersion: store.serverVersion) }
         .sheet(item: $textAction) { action in
             ValueSheet(title: action.title, hint: action.hint, initialValue: initialValue(for: action), allowsEmpty: action == .category || action == .tags) { value in
                 try await applyTextAction(action, value: value)
@@ -240,6 +285,14 @@ struct ContentView: View {
         } message: {
             Text("Removing downloaded files cannot be undone.")
         }
+        .confirmationDialog("All downloads are complete", isPresented: $showsDownloadCompletionAction) {
+            Button(downloadCompletionLabel, role: downloadCompletionAction == "shutdown" || downloadCompletionAction == "restart" ? .destructive : nil) {
+                performDownloadCompletionAction()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("qBitX is set to \(downloadCompletionLabel.lowercased()) when all downloads finish.")
+        }
         .alert("Action failed", isPresented: Binding(
             get: { actionError != nil },
             set: { if !$0 { actionError = nil } }
@@ -248,6 +301,163 @@ struct ContentView: View {
         } message: {
             Text(actionError ?? "")
         }
+        .alert("Unable to unlock qBitX", isPresented: Binding(
+            get: { authenticationError != nil },
+            set: { if !$0 { authenticationError = nil } }
+        )) {
+            Button("OK") { authenticationError = nil }
+        } message: {
+            Text(authenticationError ?? "")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+                Button { showsFileImporter = true } label: {
+                    toolbarLabel("Add Torrent", image: "plus")
+                }
+                .help("Open a .torrent file")
+
+                Button { showsURLSheet = true } label: {
+                    toolbarLabel("Add URL", image: "link.badge.plus")
+                }
+                .help("Add a magnet link or torrent URL")
+
+                Button(role: .destructive) { showsRemoveConfirmation = true } label: {
+                    toolbarLabel("Remove", image: "trash")
+                }
+                .disabled(selectedTorrent == nil)
+
+                Button { runBulkAction { try await store.command(.start, hashes: $0) } } label: {
+                    toolbarLabel("Start", image: "play.fill")
+                }
+                .disabled(selectedTorrent == nil)
+
+                Button { runBulkAction { try await store.command(.stop, hashes: $0) } } label: {
+                    toolbarLabel("Stop", image: "pause.fill")
+                }
+                .disabled(selectedTorrent == nil)
+
+                Menu {
+                    Button("Pause Session") { setSessionPaused(true) }
+                    Button("Resume Session") { setSessionPaused(false) }
+                    Divider()
+                    Button("Speed Limits…") { showsSpeedLimits = true }
+                    Menu("When Downloads Complete") {
+                        completionActionButton("none", title: "Do Nothing")
+                        completionActionButton("quit", title: "Quit qBitX")
+                        completionActionButton("sleep", title: "Sleep System")
+                        Button("Hibernate System (unavailable on macOS)") {}
+                            .disabled(true)
+                        completionActionButton("restart", title: "Restart System")
+                        completionActionButton("shutdown", title: "Shut Down System")
+                    }
+                } label: {
+                    toolbarLabel("Session", image: "pause.circle")
+                }
+
+                Button {
+                    if let path = selectedTorrent?.savePath, !path.isEmpty {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                    }
+                } label: {
+                    toolbarLabel("Open Destination", image: "folder")
+                }
+                .disabled(selectedTorrent?.savePath.isEmpty ?? true)
+
+                viewToolbarMenu
+                settingsToolbarMenu
+                helpToolbarMenu
+        }
+    }
+
+    private func toolbarLabel(_ title: String, image: String) -> some View {
+        Label(title, systemImage: image).labelStyle(ToolbarLabelStyle(showTitle: showToolbarLabels))
+    }
+
+    private var lockedOverlay: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.fill").font(.system(size: 34))
+            Text("qBitX is Locked").font(.title2.weight(.semibold))
+            Text("Authenticate with your Mac account to return to the transfer list.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button("Unlock qBitX") { unlockInterface() }
+                .buttonStyle(.glassProminent)
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
+        .contentShape(Rectangle())
+    }
+
+    private func unlockInterface() {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            authenticationError = error?.localizedDescription ?? "Mac account authentication is unavailable."
+            return
+        }
+        Task { @MainActor in
+            do {
+                let success = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock qBitX")
+                interfaceLocked = !success
+            } catch { authenticationError = error.localizedDescription }
+        }
+    }
+
+    private func syncWindowTitle() {
+        let base = "qBitX"
+        let speed = showSpeedInTitleBar ? " · ↓ \(store.transferStatus.downloadText) · ↑ \(store.transferStatus.uploadText)" : ""
+        NSApp.keyWindow?.title = base + speed
+    }
+
+    private func openURL(_ value: String) {
+        guard let url = URL(string: value) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private var viewToolbarMenu: some View {
+        Menu {
+            Toggle("Show Filter Sidebar", isOn: $showFiltersSidebar)
+            Toggle("Show Detail Pane", isOn: $showDetailPane)
+            Toggle("Show Status Bar", isOn: $showStatusBar)
+            Toggle("Show Speed in Window Title", isOn: $showSpeedInTitleBar)
+            Toggle("Toolbar Labels", isOn: $showToolbarLabels)
+            Divider()
+            Button("Execution Log…") { showsExecutionLog = true }
+            Button("Statistics…") { showsStatistics = true }
+        } label: { toolbarLabel("View", image: "rectangle.split.3x1") }
+    }
+
+    private var settingsToolbarMenu: some View {
+        Menu {
+            Button("qBittorrent Preferences…") { showsBackendPreferences = true }
+            Button("Categories and Tags…") { showsOrganization = true }
+            Button("Connection…") { showsConnectionSettings = true }
+            Divider()
+            Button("Create Torrent…") { showsTorrentCreator = true }.disabled(!store.usesBundledBackend)
+            Button("Cookies…") { showsCookies = true }
+            Button("Statistics…") { showsStatistics = true }
+            Button("Execution Log…") { showsExecutionLog = true }
+            Divider()
+            Button(interfaceLocked ? "Unlock Interface…" : "Lock Interface") {
+                if interfaceLocked { unlockInterface() }
+                else { interfaceLocked = true }
+            }
+        } label: { toolbarLabel("Settings", image: "gearshape") }
+            .help("qBittorrent preferences and connection")
+    }
+
+    private var helpToolbarMenu: some View {
+        Menu {
+            Button("qBittorrent Documentation") { openURL("https://www.qbittorrent.org/documentation") }
+            Button("Check for Updates…") { openURL("https://github.com/AndreaCodinLife/qBittorrent/releases") }
+            Button("Donate to qBittorrent") { openURL("https://www.qbittorrent.org/donate") }
+            Divider()
+            Button("About qBitX…") { showsAbout = true }
+        } label: { toolbarLabel("Help", image: "questionmark.circle") }
     }
 
     private var filterSidebar: some View {
@@ -368,12 +578,12 @@ struct ContentView: View {
                     .frame(width: 200)
                 Menu {
                     ForEach(TorrentSort.allCases) { field in
-                        Button(field.rawValue) { sortField = field }
+                        Button(field.title) { sortField = field }
                     }
                     Divider()
                     Toggle("Descending", isOn: $sortDescending)
                 } label: {
-                    Text("Sort: \(sortField.rawValue)")
+                    Text("Sort: \(sortField.title)")
                 }
                 .font(.caption)
             }
@@ -417,7 +627,7 @@ struct ContentView: View {
     @TableColumnBuilder<Torrent, Never>
     private var primaryColumns: some TableColumnContent<Torrent, Never> {
         TableColumn("Name") { torrent in
-            Label(torrent.name, systemImage: "doc.zipper").lineLimit(1)
+            Label(torrent.name, systemImage: torrent.state.symbol).lineLimit(1)
         }
         .width(min: 200, ideal: 270).customizationID("name")
         TableColumn("Size", value: \.size).width(80).customizationID("size")
@@ -626,6 +836,10 @@ struct ContentView: View {
             .padding(.vertical, 7)
             List(trackers) { tracker in
                 HStack {
+                    Text("Tier \((tracker.tier ?? 0) + 1)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Divider().frame(height: 14)
                     Text(tracker.url).lineLimit(1)
                     Spacer()
                     Text("Seeds: \(tracker.num_seeds ?? 0)")
@@ -635,12 +849,23 @@ struct ContentView: View {
                 .contextMenu {
                     Button("Edit URL…") { showDetailInput(.editTracker(tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: tracker.url) }
                     Button("Copy URL") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(tracker.url, forType: .string) }
+                    Menu("Move to Tier") {
+                        ForEach(availableTrackerTiers, id: \.self) { tier in
+                            Button("Tier \(tier + 1)\(tier == (tracker.tier ?? 0) ? " ✓" : "")") {
+                                Task { await performDetailAction { try await store.moveTracker(hash: $0, url: tracker.url, tier: tier) } }
+                            }
+                        }
+                    }
                     Button("Remove Tracker", role: .destructive) {
                         Task { await performDetailAction { try await store.removeTracker(hash: $0, url: tracker.url) } }
                     }
                 }
             }
         }
+    }
+
+    private var availableTrackerTiers: [Int] {
+        Array(0...max(1, trackers.compactMap(\.tier).max() ?? 0))
     }
 
     private var fileDetails: some View {
@@ -655,6 +880,10 @@ struct ContentView: View {
             }
             .font(.caption)
             .contextMenu {
+                if let torrent = selectedTorrent, isPreviewable(file) {
+                    Button("Preview File") { openTorrentFile(file, in: torrent) }
+                        .disabled(!torrentFileExists(file, in: torrent))
+                }
                 Menu("Download Priority") {
                     Button("Do Not Download") { setFilePriority(file, to: 0) }
                     Button("Normal") { setFilePriority(file, to: 1) }
@@ -677,41 +906,83 @@ struct ContentView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            List(peers) { peer in
-            HStack(spacing: 16) {
-                HStack(spacing: 6) {
-                    if let flag = peer.countryFlag {
-                        Text(flag).font(.body)
-                    } else {
-                        Image(systemName: "globe").foregroundStyle(.tertiary)
+            if peers.isEmpty {
+                ContentUnavailableView("No Peers", systemImage: "person.2", description: Text("No peers are connected to this torrent."))
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 12) {
+                            peerColumnHeader("Country/Region", width: 150)
+                            peerColumnHeader("IP/Address", width: 120)
+                            peerColumnHeader("Port", width: 55)
+                            peerColumnHeader("Connection", width: 100)
+                            peerColumnHeader("Flags", width: 60)
+                            peerColumnHeader("Client", width: 140)
+                            peerColumnHeader("Peer ID Client", width: 140)
+                            peerColumnHeader("Progress", width: 75)
+                            peerColumnHeader("Down Speed", width: 100)
+                            peerColumnHeader("Up Speed", width: 100)
+                            peerColumnHeader("Downloaded", width: 105)
+                            peerColumnHeader("Uploaded", width: 105)
+                            peerColumnHeader("Relevance", width: 80)
+                            peerColumnHeader("Contribution", width: 90)
+                            peerColumnHeader("Files", width: 220)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        Divider()
+                        ForEach(peers) { peer in
+                            HStack(spacing: 12) {
+                                HStack(spacing: 5) {
+                                    if let flag = peer.countryFlag { Text(flag) }
+                                    else { Image(systemName: "globe").foregroundStyle(.tertiary) }
+                                    Text(peer.countryName).lineLimit(1)
+                                }
+                                .frame(width: 150, alignment: .leading)
+                                .help(peer.countryName)
+                                peerValue(peer.ip, width: 120, tooltip: peer.host_name ?? peer.ip)
+                                peerValue("\(peer.port ?? 0)", width: 55)
+                                peerValue(peer.connection ?? "—", width: 100)
+                                peerValue(peer.flags ?? "—", width: 60, tooltip: peer.flags_desc ?? "Peer flags")
+                                peerValue(peer.client ?? "Unknown client", width: 140)
+                                peerValue(peer.peer_id_client ?? "—", width: 140)
+                                peerValue((peer.progress ?? 0).formatted(.percent.precision(.fractionLength(0))), width: 75)
+                                peerValue(TransferStatus.rateText(peer.dl_speed ?? 0), width: 100)
+                                peerValue(TransferStatus.rateText(peer.up_speed ?? 0), width: 100)
+                                peerValue(ByteCountFormatter.string(fromByteCount: peer.downloaded ?? 0, countStyle: .file), width: 105)
+                                peerValue(ByteCountFormatter.string(fromByteCount: peer.uploaded ?? 0, countStyle: .file), width: 105)
+                                peerValue("\(((peer.relevance ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%", width: 80)
+                                peerValue("\(((peer.contribution ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%", width: 90)
+                                peerValue(peer.files?.replacingOccurrences(of: "\n", with: "; ") ?? "—", width: 220, tooltip: peer.files ?? "")
+                                Spacer(minLength: 0)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button("Copy IP:port") { copyToPasteboard("\(peer.ip):\(peer.port ?? 0)") }
+                                Button("Ban Peer Permanently", role: .destructive) {
+                                    Task {
+                                        do { try await store.banPeer(address: "\(peer.ip):\(peer.port ?? 0)") }
+                                        catch { actionError = error.localizedDescription }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    Text(peer.countryName)
-                        .lineLimit(1)
                 }
-                .frame(width: 150, alignment: .leading)
-                .help(peer.countryName)
-                Text("\(peer.ip):\(peer.port ?? 0)").frame(minWidth: 150, alignment: .leading)
-                Text(peer.client ?? "Unknown client").frame(minWidth: 120, alignment: .leading)
-                Text((peer.progress ?? 0).formatted(.percent.precision(.fractionLength(0))))
-                Spacer()
-                Text("↓ \(TransferStatus.rateText(peer.dl_speed ?? 0))")
-                Text("↑ \(TransferStatus.rateText(peer.up_speed ?? 0))")
-            }
-            .font(.caption)
-            .contextMenu {
-                Button("Copy IP:port") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("\(peer.ip):\(peer.port ?? 0)", forType: .string)
-                }
-                Button("Ban Peer Permanently", role: .destructive) {
-                    Task {
-                        do { try await store.banPeer(address: "\(peer.ip):\(peer.port ?? 0)") }
-                        catch { actionError = error.localizedDescription }
-                    }
-                }
-            }
             }
         }
+    }
+
+    private func peerColumnHeader(_ title: String, width: CGFloat) -> some View {
+        Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(width: width, alignment: .leading)
+    }
+
+    private func peerValue(_ value: String, width: CGFloat, tooltip: String? = nil) -> some View {
+        Text(value).lineLimit(1).frame(width: width, alignment: .leading).help(tooltip ?? value)
     }
 
     private var webSeedDetails: some View {
@@ -739,21 +1010,46 @@ struct ContentView: View {
     }
 
     private var speedDetails: some View {
-        let history = store.speedHistory[selectedTorrentID ?? ""] ?? []
+        let cutoff = Date().addingTimeInterval(-TimeInterval(speedGraphPeriod))
+        let history = (store.speedHistory[selectedTorrentID ?? ""] ?? []).filter { $0.date >= cutoff }
         return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 20) {
+            HStack(spacing: 14) {
                 Label("Download \(selectedTorrent?.downloadRate ?? "0 B/s")", systemImage: "arrow.down")
+                    .foregroundStyle(.blue)
                 Label("Upload \(selectedTorrent?.uploadRate ?? "0 B/s")", systemImage: "arrow.up")
+                    .foregroundStyle(.green)
+                Spacer()
+                Picker("Period", selection: $speedGraphPeriod) {
+                    Text("1 Minute").tag(60)
+                    Text("5 Minutes").tag(300)
+                    Text("30 Minutes").tag(1_800)
+                    Text("3 Hours").tag(10_800)
+                    Text("6 Hours").tag(21_600)
+                    Text("12 Hours").tag(43_200)
+                    Text("24 Hours").tag(86_400)
+                }
+                .frame(width: 130)
+                Menu("Select Graphs") {
+                    Toggle("Download", isOn: $showDownloadGraph)
+                    Toggle("Upload", isOn: $showUploadGraph)
+                }
             }
             .font(.caption)
             Chart {
                 ForEach(history) { sample in
-                    LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.download), series: .value("Direction", "Download"))
-                        .foregroundStyle(.blue)
-                    LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.upload), series: .value("Direction", "Upload"))
-                        .foregroundStyle(.green)
+                    if showDownloadGraph {
+                        LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.download), series: .value("Direction", "Download"))
+                            .foregroundStyle(.blue)
+                    }
+                    if showUploadGraph {
+                        LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.upload), series: .value("Direction", "Upload"))
+                            .foregroundStyle(.green)
+                    }
                 }
             }
+            .chartLegend(.hidden)
+            .chartXAxisLabel("Time")
+            .chartYAxisLabel("Bytes per second")
             .chartYScale(domain: 0...max(1024, history.map { max($0.download, $0.upload) }.max() ?? 0))
         }
         .padding(18)
@@ -800,6 +1096,13 @@ struct ContentView: View {
         Button("Set Location…") { beginTextAction(.location, target: target) }
         Button("Set Category…") { beginTextAction(.category, target: target) }
         Button("Set Tags…") { beginTextAction(.tags, target: target) }
+        Button("Torrent Options…") { torrentOptionsTarget = TorrentOptionsTarget(hashes: hashes) }
+        Button("Preview File…") { previewTorrent = targetTorrent }
+            .disabled(hashes.count != 1)
+        Button("Open Destination Folder") {
+            if let targetTorrent, !targetTorrent.savePath.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: targetTorrent.savePath)) }
+        }
+        .disabled(targetTorrent?.savePath.isEmpty ?? true)
         Menu("Queue") {
             Button("Move to Top") { runBulkAction(hashes: hashes) { try await store.command(.topPrio, hashes: $0) } }
             Button("Move Up") { runBulkAction(hashes: hashes) { try await store.command(.increasePrio, hashes: $0) } }
@@ -830,6 +1133,11 @@ struct ContentView: View {
             Button("Names") { copySelectedTorrents(\.name, target: target) }
             Button("Torrent IDs") { copySelectedTorrents(\.id, target: target) }
             Button("Save Paths") { copySelectedTorrents(\.savePath, target: target) }
+            Button("Content Paths") { copyContentPaths(target: target) }
+            Button("Comments") { copyComments(target: target) }
+            Button("Infohash v1") { copyColumn("infohash_v1", target: target) }
+            Button("Infohash v2") { copyColumn("infohash_v2", target: target) }
+            Button("Magnet Links") { copyMagnets(target: target) }
         }
         Button("Export .torrent…") { exportSelectedTorrent(hash: hashes.first) }.disabled(hashes.count != 1)
         Divider()
@@ -918,6 +1226,64 @@ struct ContentView: View {
         }
     }
 
+    private var downloadCompletionLabel: String {
+        switch downloadCompletionAction {
+        case "quit": "Quit qBitX"
+        case "sleep": "Sleep System"
+        case "restart": "Restart System"
+        case "shutdown": "Shut Down System"
+        default: "Do Nothing"
+        }
+    }
+
+    @ViewBuilder private func completionActionButton(_ action: String, title: String) -> some View {
+        Button {
+            downloadCompletionAction = action
+        } label: {
+            if downloadCompletionAction == action {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func checkDownloadCompletion() {
+        let currentTorrents = Set(torrents.map(\.id))
+        let currentIncomplete = Set(torrents.filter { $0.progress < 1 }.map(\.id))
+        guard !currentTorrents.isEmpty else {
+            incompleteDownloadIDs = []
+            return
+        }
+        if !currentIncomplete.isEmpty {
+            incompleteDownloadIDs = currentIncomplete
+        } else if !incompleteDownloadIDs.isEmpty {
+            let completedExistingTorrents = incompleteDownloadIDs.isSubset(of: currentTorrents)
+            incompleteDownloadIDs = []
+            if completedExistingTorrents, downloadCompletionAction != "none" {
+                showsDownloadCompletionAction = true
+            }
+        }
+    }
+
+    private func performDownloadCompletionAction() {
+        switch downloadCompletionAction {
+        case "quit": NSApp.terminate(nil)
+        case "sleep": runSystemEvent("tell application \"System Events\" to sleep")
+        case "restart": runSystemEvent("tell application \"System Events\" to restart")
+        case "shutdown": runSystemEvent("tell application \"System Events\" to shut down")
+        default: break
+        }
+    }
+
+    private func runSystemEvent(_ source: String) {
+        var errorInfo: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&errorInfo)
+        if let errorInfo {
+            actionError = errorInfo[NSAppleScript.errorMessage] as? String ?? "macOS could not perform the selected power action."
+        }
+    }
+
     private func setSessionPaused(_ paused: Bool) {
         Task {
             do { try await store.setSessionPaused(paused) }
@@ -927,8 +1293,80 @@ struct ContentView: View {
 
     private func copySelectedTorrents(_ keyPath: KeyPath<Torrent, String>, target: Set<String>) {
         let value = torrents.filter { target.contains($0.id) }.map { $0[keyPath: keyPath] }.joined(separator: "\n")
+        copyToPasteboard(value)
+    }
+
+    private func copyColumn(_ key: String, target: Set<String>) {
+        copyToPasteboard(torrents.filter { target.contains($0.id) }.map { $0.column(key) }.joined(separator: "\n"))
+    }
+
+    private func copyContentPaths(target: Set<String>) {
+        copyToPasteboard(torrents.filter { target.contains($0.id) }.map { torrent in
+            let apiPath = torrent.column("content_path")
+            return apiPath == "—" ? URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: torrent.name).path : apiPath
+        }.joined(separator: "\n"))
+    }
+
+    private func copyComments(target: Set<String>) {
+        let selected = torrents.filter { target.contains($0.id) }
+        Task {
+            do {
+                let comments = try await withThrowingTaskGroup(of: (String, String).self) { group in
+                    for torrent in selected {
+                        group.addTask {
+                            let details = try await store.properties(for: torrent.id)
+                            return (torrent.id, details.comment ?? "")
+                        }
+                    }
+                    var values: [String: String] = [:]
+                    for try await (hash, comment) in group { values[hash] = comment }
+                    return values
+                }
+                copyToPasteboard(selected.map { comments[$0.id] ?? "" }.joined(separator: "\n"))
+            } catch { actionError = error.localizedDescription }
+        }
+    }
+
+    private func copyMagnets(target: Set<String>) {
+        let links = torrents.filter { target.contains($0.id) }.map { torrent -> String in
+            var components = URLComponents()
+            components.scheme = "magnet"
+            var items = [URLQueryItem(name: "dn", value: torrent.name)]
+            let v1 = torrent.column("infohash_v1")
+            if v1 != "—" { items.append(URLQueryItem(name: "xt", value: "urn:btih:\(v1)")) }
+            else if torrent.id.count == 40 { items.append(URLQueryItem(name: "xt", value: "urn:btih:\(torrent.id)")) }
+            let v2 = torrent.column("infohash_v2")
+            if v2 != "—" {
+                let hash = v2.replacingOccurrences(of: "^1220", with: "", options: .regularExpression)
+                items.append(URLQueryItem(name: "xt", value: "urn:btmh:1220\(hash)"))
+            }
+            components.queryItems = items
+            return components.string ?? "magnet:?"
+        }
+        copyToPasteboard(links.joined(separator: "\n"))
+    }
+
+    private func copyToPasteboard(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func isPreviewable(_ file: TorrentFile) -> Bool {
+        TorrentFilePreview.isPreviewable(file.name)
+    }
+
+    private func torrentFileURL(_ file: TorrentFile, in torrent: Torrent) -> URL {
+        URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: file.name)
+    }
+
+    private func torrentFileExists(_ file: TorrentFile, in torrent: Torrent) -> Bool {
+        FileManager.default.fileExists(atPath: torrentFileURL(file, in: torrent).path)
+    }
+
+    private func openTorrentFile(_ file: TorrentFile, in torrent: Torrent) {
+        let url = torrentFileURL(file, in: torrent)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func exportSelectedTorrent(hash: String?) {
@@ -1035,48 +1473,190 @@ private struct PendingTorrentFile: Identifiable {
     let data: Data
 }
 
+private struct ToolbarLabelStyle: LabelStyle {
+    let showTitle: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if showTitle {
+            HStack(spacing: 5) { configuration.icon; configuration.title }
+        } else {
+            configuration.icon
+        }
+    }
+}
+
+private struct AboutView: View {
+    @Environment(\.dismiss) private var dismiss
+    let serverVersion: String
+    private var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Preview" }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle.fill").font(.system(size: 42)).foregroundStyle(.tint)
+            Text("qBitX").font(.largeTitle.weight(.semibold))
+            Text("Native macOS interface for qBittorrent")
+                .foregroundStyle(.secondary)
+            Text("qBitX \(appVersion) · qBittorrent \(serverVersion)")
+                .font(.caption).foregroundStyle(.secondary)
+            Link("qBitX on GitHub", destination: URL(string: "https://github.com/AndreaCodinLife/qBittorrent")!)
+            Button("Done") { dismiss() }.buttonStyle(.glass).keyboardShortcut(.defaultAction)
+        }
+        .padding(28)
+        .frame(width: 380)
+    }
+}
+
 private struct AddTorrentSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("qBitX.addTorrentDefaultCategory") private var defaultCategory = ""
     let file: PendingTorrentFile?
+    let store: TorrentStore
     let onAdd: (String, TorrentAddOptions) async throws -> Void
     @State private var url = ""
     @State private var savePath = ""
+    @State private var downloadPathEnabled = false
+    @State private var downloadPath = ""
     @State private var category = ""
+    @State private var rename = ""
+    @State private var setDefaultCategory = false
     @State private var tags = ""
     @State private var stopped = false
     @State private var sequential = false
     @State private var firstLastPiece = false
     @State private var automaticManagement = false
+    @State private var addToQueueTop = false
+    @State private var seedMode = false
+    @State private var stopCondition = "None"
+    @State private var contentLayout = "Original"
     @State private var downloadLimit = 0
     @State private var uploadLimit = 0
+    @State private var metadata: TorrentMetadata?
+    @State private var filePriorities: [Int] = []
+    @State private var fileFilter = ""
+    @State private var isLoadingMetadata = false
     @State private var errorMessage: String?
     @State private var isAdding = false
 
+    private var files: [TorrentMetadataFile] { metadata?.info?.files ?? [] }
+    private var filteredFileIndices: [Int] {
+        files.indices.filter { fileFilter.isEmpty || files[$0].path.localizedCaseInsensitiveContains(fileFilter) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(file == nil ? "Add Torrent URL" : "Add Torrent File")
-                    .font(.title2.weight(.semibold))
-                Text(file?.name ?? "Enter a magnet link or a URL to a .torrent file.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(file == nil ? "Add Torrent URL" : "Add Torrent File")
+                        .font(.title2.weight(.semibold))
+                    Text(file?.name ?? "Enter a magnet link or a URL to a .torrent file.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if file == nil {
+                    Button("Load Content") { Task { await loadMetadata() } }
+                        .buttonStyle(.glass)
+                        .disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingMetadata)
+                }
             }
             if file == nil {
                 TextField("magnet:?xt=… or https://…", text: $url)
                     .textFieldStyle(.roundedBorder)
             }
-            Form {
-                TextField("Save location", text: $savePath, prompt: Text("Backend default"))
-                TextField("Category", text: $category)
-                TextField("Tags (comma separated)", text: $tags)
-                Toggle("Add stopped", isOn: $stopped)
-                Toggle("Automatic torrent management", isOn: $automaticManagement)
-                Toggle("Download in sequential order", isOn: $sequential)
-                Toggle("Prioritize first and last pieces", isOn: $firstLastPiece)
-                TextField("Download limit (KiB/s; 0 = unlimited)", value: $downloadLimit, format: .number)
-                TextField("Upload limit (KiB/s; 0 = unlimited)", value: $uploadLimit, format: .number)
+            HStack(alignment: .top, spacing: 14) {
+                Form {
+                    Section("Location and organization") {
+                        TextField("Save location", text: $savePath, prompt: Text("Backend default"))
+                            .disabled(automaticManagement)
+                        Toggle("Use another path for incomplete torrents", isOn: $downloadPathEnabled)
+                            .disabled(automaticManagement)
+                        if downloadPathEnabled {
+                            TextField("Incomplete save path", text: $downloadPath)
+                                .disabled(automaticManagement)
+                        }
+                        TextField("Rename torrent", text: $rename, prompt: Text("Keep original name"))
+                        TextField("Category", text: $category)
+                        Toggle("Set as default category", isOn: $setDefaultCategory)
+                        TextField("Tags (comma separated)", text: $tags)
+                    }
+                    Section("Download behavior") {
+                        Toggle("Add stopped", isOn: $stopped)
+                        Toggle("Automatic torrent management", isOn: $automaticManagement)
+                        Toggle("Add to top of queue", isOn: $addToQueueTop)
+                        Toggle("Seed mode", isOn: $seedMode)
+                        Toggle("Download in sequential order", isOn: $sequential)
+                        Toggle("Prioritize first and last pieces", isOn: $firstLastPiece)
+                        Picker("Stop condition", selection: $stopCondition) {
+                            Text("None").tag("None")
+                            Text("Metadata received").tag("MetadataReceived")
+                            Text("Files checked").tag("FilesChecked")
+                        }
+                        Picker("Content layout", selection: $contentLayout) {
+                            Text("Original").tag("Original")
+                            Text("Create subfolder").tag("Subfolder")
+                            Text("Don’t create subfolder").tag("NoSubfolder")
+                        }
+                    }
+                    Section("Transfer limits") {
+                        TextField("Download limit (KiB/s; 0 = unlimited)", value: $downloadLimit, format: .number)
+                        TextField("Upload limit (KiB/s; 0 = unlimited)", value: $uploadLimit, format: .number)
+                    }
+                }
+                .formStyle(.grouped)
+                .frame(width: 440)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Files").font(.headline)
+                        Spacer()
+                        if !files.isEmpty { Text("\(files.count) files").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    if !files.isEmpty {
+                        TextField("Filter files…", text: $fileFilter)
+                            .textFieldStyle(.roundedBorder)
+                        List {
+                            ForEach(filteredFileIndices, id: \.self) { index in
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(files[index].path).lineLimit(1)
+                                        Text(ByteCountFormatter.string(fromByteCount: files[index].length, countStyle: .file))
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 6)
+                                    Picker("Priority", selection: Binding(
+                                        get: { filePriorities.indices.contains(index) ? filePriorities[index] : 1 },
+                                        set: { if filePriorities.indices.contains(index) { filePriorities[index] = $0 } }
+                                    )) {
+                                        Text("Skip").tag(0)
+                                        Text("Normal").tag(1)
+                                        Text("High").tag(6)
+                                        Text("Maximum").tag(7)
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 100)
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
+                        .listStyle(.inset)
+                    } else if isLoadingMetadata {
+                        ContentUnavailableView {
+                            ProgressView("Loading torrent metadata…")
+                        }
+                    } else {
+                        ContentUnavailableView("No File List", systemImage: "doc.text.magnifyingglass", description: Text(file == nil ? "Load metadata to preview files and set priorities before adding." : "Torrent metadata could not be loaded."))
+                    }
+                    if let metadata {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(metadata.info?.name ?? "Torrent metadata").font(.caption.weight(.semibold)).lineLimit(1)
+                            Text("\(metadata.infohash_v1 ?? metadata.infohash_v2 ?? metadata.id ?? "") · \(files.count) files")
+                                .font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                            Button("Save as .torrent…") { saveMetadata() }
+                                .buttonStyle(.link)
+                        }
+                    }
+                }
+                .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .formStyle(.grouped)
-            .frame(height: 375)
+            .frame(height: 505)
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.red)
             }
@@ -1089,15 +1669,25 @@ private struct AddTorrentSheet: View {
                         do {
                             var options = TorrentAddOptions()
                             options.savePath = savePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                            options.downloadPathEnabled = downloadPathEnabled && !automaticManagement
+                            options.downloadPath = downloadPath.trimmingCharacters(in: .whitespacesAndNewlines)
                             options.category = category.trimmingCharacters(in: .whitespacesAndNewlines)
+                            options.rename = rename.trimmingCharacters(in: .whitespacesAndNewlines)
                             options.tags = tags.trimmingCharacters(in: .whitespacesAndNewlines)
                             options.stopped = stopped
                             options.automaticManagement = automaticManagement
+                            options.addToQueueTop = addToQueueTop
+                            options.seedMode = seedMode
                             options.sequential = sequential
                             options.firstLastPiece = firstLastPiece
+                            options.stopCondition = stopCondition
+                            options.contentLayout = contentLayout
                             options.downloadLimitKiB = max(0, downloadLimit)
                             options.uploadLimitKiB = max(0, uploadLimit)
-                            try await onAdd(url.trimmingCharacters(in: .whitespacesAndNewlines), options)
+                            options.filePriorities = files.isEmpty ? nil : filePriorities
+                            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
+                            if setDefaultCategory { defaultCategory = options.category }
+                            try await onAdd(source, options)
                             dismiss()
                         } catch {
                             errorMessage = error.localizedDescription
@@ -1111,6 +1701,42 @@ private struct AddTorrentSheet: View {
             }
         }
         .padding(25)
-        .frame(width: 540)
+        .frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 760)
+        .task {
+            if category.isEmpty { category = defaultCategory }
+            if file != nil { await loadMetadata() }
+        }
+    }
+
+    private func loadMetadata() async {
+        guard !isLoadingMetadata else { return }
+        isLoadingMetadata = true
+        errorMessage = nil
+        defer { isLoadingMetadata = false }
+        do {
+            let fetched: TorrentMetadata
+            if let file {
+                fetched = try await store.parseTorrentMetadata(file: file.data, filename: file.name)
+            } else {
+                fetched = try await store.fetchTorrentMetadata(source: url.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            metadata = fetched
+            filePriorities = (fetched.info?.files ?? []).map { $0.priority ?? 1 }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func saveMetadata() {
+        guard metadata != nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "torrent") ?? .data]
+        panel.nameFieldStringValue = (metadata?.info?.name ?? "torrent") + ".torrent"
+        panel.begin { response in
+            guard response == .OK, let destination = panel.url else { return }
+            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
+            Task {
+                do { try await store.saveTorrentMetadata(source: source).write(to: destination, options: .atomic) }
+                catch { errorMessage = error.localizedDescription }
+            }
+        }
     }
 }

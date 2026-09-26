@@ -55,6 +55,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>qBitX uses macOS system events to perform a power action you selected after downloads complete.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

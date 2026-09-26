@@ -6,10 +6,22 @@ struct RSSPane: View {
     @State private var selectedFeedID: String?
     @State private var showsAddFeed = false
     @State private var feedURL = ""
+    @State private var feedName = ""
+    @State private var feedFolder = ""
+    @State private var folders: [RSSFolder] = []
+    @State private var showsAddFolder = false
+    @State private var folderName = ""
+    @State private var folderParent = ""
+    @State private var showsRenameFolder = false
+    @State private var editingFolderPath = ""
     @State private var articleFilter = ""
     @State private var editedFeedURL = ""
     @State private var showsEditFeed = false
     @State private var showsRemoveFeed = false
+    @State private var showsMoveFeed = false
+    @State private var editingFeedPath = ""
+    @State private var newFeedPath = ""
+    @State private var showsRules = false
     @State private var errorMessage: String?
 
     private var selectedFeed: RSSFeed? { feeds.first { $0.id == selectedFeedID } }
@@ -23,21 +35,46 @@ struct RSSPane: View {
                 HStack {
                     Text("FEEDS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     Spacer()
+                    Button { showsAddFolder = true } label: { Image(systemName: "folder.badge.plus") }
+                        .buttonStyle(.glass).help("Add RSS folder")
                     Button { showsAddFeed = true } label: { Image(systemName: "plus") }
                         .buttonStyle(.glass)
                         .help("Add RSS feed")
                 }
                 .padding(12)
                 List(selection: $selectedFeedID) {
-                    ForEach(feeds) { feed in
-                        Label(feed.title, systemImage: "dot.radiowaves.left.and.right")
-                            .tag(feed.id)
-                            .contextMenu {
-                                Button("Refresh") { Task { await refresh(feed) } }
-                                Button("Mark All Read") { Task { await markRead(feed) } }
-                                Button("Edit URL…") { selectedFeedID = feed.id; editedFeedURL = feed.url; showsEditFeed = true }
-                                Button("Remove Feed", role: .destructive) { selectedFeedID = feed.id; showsRemoveFeed = true }
+                    if !folders.isEmpty {
+                        Section("Folders") {
+                            ForEach(folders) { folder in
+                                Label(folder.title, systemImage: "folder")
+                                    .contextMenu {
+                                        Button("Rename Folder…") {
+                                            editingFolderPath = folder.path
+                                            folderName = (folder.path as NSString).lastPathComponent
+                                            showsRenameFolder = true
+                                        }
+                                        Button("Remove Folder", role: .destructive) {
+                                            Task {
+                                                do { try await store.removeRSSFeed(path: folder.path); await reload() }
+                                                catch { errorMessage = error.localizedDescription }
+                                            }
+                                        }
+                                    }
                             }
+                        }
+                    }
+                    Section("Feeds") {
+                        ForEach(feeds) { feed in
+                            Label(feed.title, systemImage: "dot.radiowaves.left.and.right")
+                                .tag(feed.id)
+                                .contextMenu {
+                                    Button("Refresh") { Task { await refresh(feed) } }
+                                    Button("Mark All Read") { Task { await markRead(feed) } }
+                                    Button("Edit URL…") { selectedFeedID = feed.id; editedFeedURL = feed.url; showsEditFeed = true }
+                                    Button("Rename or Move…") { editingFeedPath = feed.path; newFeedPath = feed.path; showsMoveFeed = true }
+                                    Button("Remove Feed", role: .destructive) { selectedFeedID = feed.id; showsRemoveFeed = true }
+                                }
+                        }
                     }
                 }
                 .listStyle(.sidebar)
@@ -47,6 +84,8 @@ struct RSSPane: View {
                 HStack {
                     Text(selectedFeed?.title ?? "RSS").font(.headline)
                     Spacer()
+                    Button("Downloader Rules…") { showsRules = true }
+                        .buttonStyle(.glass)
                     Button { if let feed = selectedFeed { Task { await refresh(feed) } } else { Task { await reload() } } } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.glass)
                         .help("Refresh feeds")
@@ -130,20 +169,54 @@ struct RSSPane: View {
             .padding(22)
             .frame(width: 430)
         }
+        .sheet(isPresented: $showsMoveFeed) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Rename or Move RSS Feed").font(.title2.weight(.semibold))
+                Text("Enter a new feed path. Use Folder/Feed to place it in a folder.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                TextField("Feed path", text: $newFeedPath).textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsMoveFeed = false }
+                    Button("Save") {
+                        let path = newFeedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Task {
+                            do { try await store.moveRSSItem(path: editingFeedPath, to: path); showsMoveFeed = false; selectedFeedID = path; await reload() }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(newFeedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(22)
+            .frame(width: 470)
+        }
         .sheet(isPresented: $showsAddFeed) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Add RSS Feed").font(.title2.weight(.semibold))
                 TextField("https://example.com/feed.xml", text: $feedURL)
                     .textFieldStyle(.roundedBorder)
+                TextField("Feed name or path (optional)", text: $feedName)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Folder", selection: $feedFolder) {
+                    Text("Root").tag("")
+                    ForEach(folders) { folder in Text(folder.path).tag(folder.path) }
+                }
                 HStack {
                     Spacer()
                     Button("Cancel") { showsAddFeed = false }
                     Button("Add Feed") {
                         Task {
                             do {
-                                try await store.addRSSFeed(feedURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                                let url = feedURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                                let name = feedName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                let leaf = name.isEmpty ? url : name
+                                let path = feedFolder.isEmpty ? leaf : "\(feedFolder)/\(leaf)"
+                                try await store.addRSSFeed(url, path: path)
                                 showsAddFeed = false
                                 feedURL = ""
+                                feedName = ""
                                 await reload()
                             } catch { errorMessage = error.localizedDescription }
                         }
@@ -153,13 +226,64 @@ struct RSSPane: View {
                 }
             }
             .padding(22)
-            .frame(width: 430)
+            .frame(width: 470)
         }
+        .sheet(isPresented: $showsAddFolder) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Add RSS Folder").font(.title2.weight(.semibold))
+                TextField("Folder name", text: $folderName).textFieldStyle(.roundedBorder)
+                Picker("Parent folder", selection: $folderParent) {
+                    Text("Root").tag("")
+                    ForEach(folders) { folder in Text(folder.path).tag(folder.path) }
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsAddFolder = false }
+                    Button("Add Folder") {
+                        let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let path = folderParent.isEmpty ? name : "\(folderParent)/\(name)"
+                        Task {
+                            do { try await store.addRSSFolder(path: path); showsAddFolder = false; folderName = ""; folderParent = ""; await reload() }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(22)
+            .frame(width: 400)
+        }
+        .sheet(isPresented: $showsRenameFolder) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Rename RSS Folder").font(.title2.weight(.semibold))
+                TextField("Folder name", text: $folderName).textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsRenameFolder = false }
+                    Button("Save") {
+                        let parent = (editingFolderPath as NSString).deletingLastPathComponent
+                        let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let destination = parent == "." || parent.isEmpty ? name : "\(parent)/\(name)"
+                        Task {
+                            do { try await store.moveRSSItem(path: editingFolderPath, to: destination); showsRenameFolder = false; await reload() }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(22)
+            .frame(width: 400)
+        }
+        .sheet(isPresented: $showsRules) { RSSRulesView(store: store) }
     }
 
     private func reload() async {
         do {
             feeds = try await store.rssFeeds()
+            folders = try await store.rssFolders()
             if selectedFeedID == nil || !feeds.contains(where: { $0.id == selectedFeedID }) { selectedFeedID = feeds.first?.id }
             errorMessage = nil
         } catch is CancellationError {

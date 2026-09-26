@@ -75,14 +75,29 @@ final class TorrentStore {
         return try await api.preferencesData()
     }
 
-    func createTorrent(sourcePath: String, outputPath: String, trackers: String, comment: String, isPrivate: Bool, format: String) async throws -> String {
+    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, comment: comment, isPrivate: isPrivate, format: format)
+        return try await api.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, pieceSize: pieceSize, format: format)
     }
 
     func torrentCreationStatus(taskID: String) async throws -> TorrentCreationStatus {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.torrentCreationStatus(taskID: taskID)
+    }
+
+    func torrentCreationTasks() async throws -> [TorrentCreationStatus] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.torrentCreationTasks()
+    }
+
+    func deleteTorrentCreationTask(_ taskID: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.deleteTorrentCreationTask(taskID)
+    }
+
+    func createdTorrentFile(taskID: String) async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.createdTorrentFile(taskID: taskID)
     }
 
     func cookies() async throws -> [BackendCookie] {
@@ -100,9 +115,9 @@ final class TorrentStore {
         return try await api.statistics()
     }
 
-    func mainLog(after id: Int) async throws -> [LogEntry] {
+    func mainLog(after id: Int, normal: Bool = true, info: Bool = true, warning: Bool = true, critical: Bool = true) async throws -> [LogEntry] {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.mainLog(after: id)
+        return try await api.mainLog(after: id, normal: normal, info: info, warning: warning, critical: critical)
     }
 
     func setPreference(key: String, jsonValue: String) async throws {
@@ -121,8 +136,10 @@ final class TorrentStore {
             let now = Date()
             for torrent in torrents {
                 var samples = speedHistory[torrent.id, default: []]
-                samples.append(TransferSample(date: now, download: torrent.downloadRateBytes, upload: torrent.uploadRateBytes))
-                if samples.count > 90 { samples.removeFirst(samples.count - 90) }
+                if samples.last.map({ now.timeIntervalSince($0.date) >= 10 }) ?? true {
+                    samples.append(TransferSample(date: now, download: torrent.downloadRateBytes, upload: torrent.uploadRateBytes))
+                }
+                if samples.count > 8_640 { samples.removeFirst(samples.count - 8_640) }
                 speedHistory[torrent.id] = samples
             }
             let activeHashes = Set(torrents.map(\.id))
@@ -165,6 +182,50 @@ final class TorrentStore {
         guard !hashes.isEmpty else { return }
         try await api.setTorrentField("setAutoManagement", hashes: hashes, field: "enable", value: value ? "true" : "false")
         await refresh()
+    }
+
+    func setTorrentLimits(hashes: [String], downloadKiB: Int64, uploadKiB: Int64, ratio: Double, seedingMinutes: Int, inactiveMinutes: Int, action: String, mode: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.setTorrentDownloadLimit(hashes: hashes, kibPerSecond: downloadKiB)
+        try await api.setTorrentUploadLimit(hashes: hashes, kibPerSecond: uploadKiB)
+        try await api.setShareLimits(hashes: hashes, ratio: ratio, seedingMinutes: seedingMinutes, inactiveMinutes: inactiveMinutes, action: action, mode: mode)
+        await refresh()
+    }
+
+    func categoriesData() async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.categoriesData()
+    }
+
+    func tagsData() async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.tagsData()
+    }
+
+    func createCategory(_ name: String, savePath: String, downloadPathEnabled: Bool, downloadPath: String, ratioLimit: String, seedingMinutes: String, inactiveMinutes: String, mode: String, action: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.createCategory(name, savePath: savePath, downloadPathEnabled: downloadPathEnabled, downloadPath: downloadPath, ratioLimit: ratioLimit, seedingMinutes: seedingMinutes, inactiveMinutes: inactiveMinutes, mode: mode, action: action)
+    }
+
+    func editCategory(_ name: String, savePath: String, downloadPathEnabled: Bool, downloadPath: String, ratioLimit: String, seedingMinutes: String, inactiveMinutes: String, mode: String, action: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.editCategory(name, savePath: savePath, downloadPathEnabled: downloadPathEnabled, downloadPath: downloadPath, ratioLimit: ratioLimit, seedingMinutes: seedingMinutes, inactiveMinutes: inactiveMinutes, mode: mode, action: action)
+    }
+
+    func removeCategory(_ name: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeCategory(name)
+        await refresh()
+    }
+
+    func createTags(_ names: [String]) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.createTags(names)
+    }
+
+    func removeTag(_ name: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeTag(name)
     }
 
     func setLocation(_ path: String, hashes: [String]) async throws {
@@ -227,6 +288,21 @@ final class TorrentStore {
         await refresh()
     }
 
+    func parseTorrentMetadata(file data: Data, filename: String) async throws -> TorrentMetadata {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.parseTorrentMetadata(file: data, filename: filename)
+    }
+
+    func fetchTorrentMetadata(source: String) async throws -> TorrentMetadata {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.fetchTorrentMetadata(source: source)
+    }
+
+    func saveTorrentMetadata(source: String) async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.saveTorrentMetadata(source: source)
+    }
+
     func properties(for hash: String) async throws -> TorrentProperties {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.properties(for: hash)
@@ -260,6 +336,11 @@ final class TorrentStore {
     func editTracker(hash: String, url: String, newURL: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.editTracker(hash: hash, url: url, newURL: newURL)
+    }
+
+    func moveTracker(hash: String, url: String, tier: Int) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.moveTracker(hash: hash, url: url, tier: tier)
     }
 
     func removeTracker(hash: String, url: String) async throws {
@@ -371,9 +452,14 @@ final class TorrentStore {
         return try await api.rssFeeds()
     }
 
-    func addRSSFeed(_ url: String) async throws {
+    func rssFolders() async throws -> [RSSFolder] {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.addRSSFeed(url)
+        return try await api.rssFolders()
+    }
+
+    func addRSSFeed(_ url: String, path: String? = nil) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.addRSSFeed(url, path: path)
     }
 
     func addRSSArticle(_ article: RSSArticle) async throws {
@@ -409,6 +495,51 @@ final class TorrentStore {
     func addRSSFolder(path: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.addRSSFolder(path: path)
+    }
+
+    func moveRSSItem(path: String, to destination: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.moveRSSItem(path: path, to: destination)
+    }
+
+    func rssRulesData() async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.rssRulesData()
+    }
+
+    func exportRSSRules() async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.exportRSSRules()
+    }
+
+    func importRSSRules(_ data: Data) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.importRSSRules(data)
+    }
+
+    func setRSSRule(name: String, definition: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.setRSSRule(name: name, definition: definition)
+    }
+
+    func renameRSSRule(_ name: String, to newName: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.renameRSSRule(name, to: newName)
+    }
+
+    func cloneRSSRule(_ name: String, as newName: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.cloneRSSRule(name, as: newName)
+    }
+
+    func removeRSSRule(_ name: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeRSSRule(name)
+    }
+
+    func rssRuleMatches(_ name: String) async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.rssRuleMatches(name)
     }
 }
 

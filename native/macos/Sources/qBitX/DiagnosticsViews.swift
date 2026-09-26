@@ -26,14 +26,20 @@ struct StatisticsView: View {
                         LabeledContent("Downloaded", value: bytes(statistics.dl_info_data))
                         LabeledContent("Uploaded", value: bytes(statistics.up_info_data))
                         LabeledContent("Wasted", value: bytes(statistics.total_wasted_session))
+                        LabeledContent("Connected peers", value: "\(statistics.total_peer_connections ?? 0)")
+                    }
+                    Section("Cache") {
+                        LabeledContent("Read cache hits", value: "\(statistics.read_cache_hits ?? "—")%")
+                        LabeledContent("Total buffer size", value: bytes(statistics.total_buffers_size))
                     }
                     Section("Performance") {
-                        LabeledContent("Peer connections", value: "\(statistics.total_peer_connections ?? 0)")
-                        LabeledContent("Read cache hits", value: statistics.read_cache_hits ?? "—")
+                        LabeledContent("Write cache overload", value: "\(statistics.write_cache_overload ?? "—")%")
+                        LabeledContent("Read cache overload", value: "\(statistics.read_cache_overload ?? "—")%")
                         LabeledContent("Queued I/O jobs", value: "\(statistics.queued_io_jobs ?? 0)")
+                        LabeledContent("Average time in queue", value: "\(statistics.average_time_queue ?? 0) ms")
+                        LabeledContent("Total queued size", value: bytes(statistics.total_queued_size))
                         LabeledContent("Queued tracker announces", value: "\(statistics.queued_tracker_announces ?? 0)")
                         LabeledContent("Request latency", value: "\(statistics.request_latency ?? 0) ms")
-                        LabeledContent("Free disk space", value: bytes(statistics.free_space_on_disk))
                     }
                 }
             } else if errorMessage == nil {
@@ -62,6 +68,10 @@ struct ExecutionLogView: View {
     @State private var entries: [LogEntry] = []
     @State private var searchText = ""
     @State private var errorMessage: String?
+    @State private var showNormal = true
+    @State private var showInfo = true
+    @State private var showWarnings = true
+    @State private var showCritical = true
 
     private var visibleEntries: [LogEntry] {
         entries.filter { searchText.isEmpty || $0.message.localizedCaseInsensitiveContains(searchText) }
@@ -74,6 +84,12 @@ struct ExecutionLogView: View {
                 Spacer()
                 TextField("Filter messages…", text: $searchText)
                     .textFieldStyle(.roundedBorder).frame(width: 190)
+                Menu("Message Types") {
+                    Toggle("Normal", isOn: $showNormal)
+                    Toggle("Information", isOn: $showInfo)
+                    Toggle("Warning", isOn: $showWarnings)
+                    Toggle("Critical", isOn: $showCritical)
+                }
                 Button("Done") { dismiss() }
             }
             .padding(16)
@@ -90,10 +106,11 @@ struct ExecutionLogView: View {
             }
         }
         .frame(width: 780, height: 520)
-        .task {
+        .task(id: "\(showNormal)|\(showInfo)|\(showWarnings)|\(showCritical)") {
+            entries = []
             while !Task.isCancelled {
                 do {
-                    let latest = try await store.mainLog(after: entries.last?.id ?? -1)
+                    let latest = try await store.mainLog(after: entries.last?.id ?? -1, normal: showNormal, info: showInfo, warning: showWarnings, critical: showCritical)
                     entries.append(contentsOf: latest)
                     if entries.count > 2_000 { entries.removeFirst(entries.count - 2_000) }
                     errorMessage = nil

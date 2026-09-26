@@ -22,7 +22,7 @@ enum TorrentState: String, CaseIterable, Sendable {
     }
 
     var symbol: String {
-        switch self {
+        return switch self {
         case .downloading: "arrow.down.circle.fill"
         case .seeding: "arrow.up.circle.fill"
         case .paused: "pause.circle.fill"
@@ -49,6 +49,7 @@ struct Torrent: Identifiable, Sendable {
     let etaSeconds: Int64
     let ratio: Double
     let savePath: String
+    let rawState: String
     let state: TorrentState
     let forceStart: Bool
     let sequentialDownload: Bool
@@ -56,6 +57,7 @@ struct Torrent: Identifiable, Sendable {
     let automaticManagement: Bool
     let superSeeding: Bool
     let extra: [String: String]
+    let sortNumbers: [String: Double]
 
     func column(_ key: String) -> String { extra[key] ?? "—" }
 
@@ -77,11 +79,20 @@ struct Torrent: Identifiable, Sendable {
 }
 
 enum TorrentFilter: String, CaseIterable, Identifiable {
-    case all = "All Torrents"
+    case all = "All"
     case downloading = "Downloading"
     case seeding = "Seeding"
-    case paused = "Stopped"
+    case completed = "Completed"
+    case running = "Running"
+    case stopped = "Stopped"
+    case active = "Active"
+    case inactive = "Inactive"
     case stalled = "Stalled"
+    case stalledUploading = "Stalled Uploading"
+    case stalledDownloading = "Stalled Downloading"
+    case checking = "Checking"
+    case moving = "Moving"
+    case errored = "Errored"
 
     var id: String { rawValue }
 
@@ -90,18 +101,36 @@ enum TorrentFilter: String, CaseIterable, Identifiable {
         case .all: "square.stack.fill"
         case .downloading: "arrow.down"
         case .seeding: "arrow.up"
-        case .paused: "pause"
-        case .stalled: "exclamationmark.triangle"
+        case .completed: "checkmark.circle"
+        case .running: "play.circle"
+        case .stopped: "pause"
+        case .active: "bolt.fill"
+        case .inactive: "moon"
+        case .stalled, .stalledUploading, .stalledDownloading: "exclamationmark.triangle"
+        case .checking: "checkmark.circle"
+        case .moving: "arrow.triangle.2.circlepath"
+        case .errored: "xmark.circle"
         }
     }
 
     func includes(_ torrent: Torrent) -> Bool {
-        switch self {
+        let value = torrent.rawState
+        let isActive = torrent.downloadRateBytes > 0 || torrent.uploadRateBytes > 0
+        return switch self {
         case .all: true
-        case .downloading: torrent.state == .downloading
-        case .seeding: torrent.state == .seeding
-        case .paused: torrent.state == .paused
-        case .stalled: torrent.state == .stalled || torrent.state == .error
+        case .downloading: ["downloading", "forcedDL", "metaDL", "forcedMetaDL", "stalledDL", "checkingDL", "stoppedDL", "queuedDL"].contains(value)
+        case .seeding: ["uploading", "forcedUP", "stalledUP", "checkingUP", "queuedUP"].contains(value)
+        case .completed: ["uploading", "forcedUP", "stalledUP", "checkingUP", "stoppedUP", "queuedUP"].contains(value)
+        case .running: value != "stoppedUP" && value != "stoppedDL"
+        case .stopped: value == "stoppedUP" || value == "stoppedDL"
+        case .active: isActive
+        case .inactive: !isActive
+        case .stalled: value == "stalledUP" || value == "stalledDL"
+        case .stalledUploading: value == "stalledUP"
+        case .stalledDownloading: value == "stalledDL"
+        case .checking: value.hasPrefix("checking")
+        case .moving: value == "moving"
+        case .errored: value == "error" || value == "missingFiles"
         }
     }
 }

@@ -2,7 +2,7 @@
 
 qBitX is a SwiftUI interface for a bundled headless qBittorrent backend. It keeps the existing toolbar, filter sidebar, transfer table, lower detail tabs, and status bar, and uses native Liquid Glass controls. By default it uses a separate torrent library under `~/Library/Application Support/qBitX/Backend`. The original qBittorrent profile is untouched.
 
-**Feature parity is incomplete.** See the [feature parity audit](FEATURE_PARITY.md) for the original desktop features that still need native controls.
+The main transfer, search, RSS, organization, and diagnostics workflows are implemented. **Feature parity is still under audit**; see the [feature parity audit](FEATURE_PARITY.md) for known gaps and verification limits.
 
 ## Build and open
 
@@ -22,6 +22,6 @@ Use the Settings button to connect to an existing qBittorrent Web UI using an AP
 
 ## Current scope
 
-The Transfers view supports status, category, tag, and tracker filters; a customizable 38-column table; a pre-add options dialog for URL or file torrents; multi-selection and batch actions; queue and torrent behavior controls; and the General, Trackers, Peers, HTTP Sources, Content, and Speed detail tabs. The Peers tab shows country flags and names when the backend resolves peer countries; qBitX enables this in its own library. The Speed chart shows recent rates for the selected torrent.
+The Transfers view supports the full set of 14 status filters, category, tag, and tracker filters; a customizable and sortable 38-column table; a pre-add metadata and file-priority dialog; multi-selection and batch actions; queue and torrent behavior controls; and the General, Trackers, Peers, HTTP Sources, Content, and Speed detail tabs. The Peers tab shows country flags and names when the backend resolves peer countries; qBitX enables this in its own library. The Speed chart offers selectable periods up to 24 hours while qBitX is running.
 
-Search uses enabled qBittorrent search plugins, which can be installed and managed in the Search view. RSS lists feeds and articles, lets you manage feeds, and adds an article's torrent to the library. Settings includes a local torrent creator, cookies, session speeds, backend preferences, statistics, and the execution log. The preview does not yet expose every preference or management action from the Qt interface.
+Search supports query history, multiple result tabs, and search-plugin installation and management. RSS supports folders, feed management, and automatic downloader rules. Settings includes a torrent creator, cookies, session speeds, backend preferences, statistics, and a filterable execution log. The preview still lacks several smaller Qt workflows; see the [feature audit](FEATURE_PARITY.md).

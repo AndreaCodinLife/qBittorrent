@@ -1,39 +1,40 @@
-# qBitX feature parity audit
+# qBitX desktop feature parity audit
 
-**Result: qBitX is not feature complete with the original qBittorrent desktop UI.**
-This is a source-level audit of the `qBitX` branch against the Qt UI in this fork. “Present” means the native UI exposes the action; “Partial” means only a subset is exposed; “Missing” means there is no native control. A working backend API alone does not count as a UI feature.
+This checklist compares the native macOS preview with the desktop workflows in this qBittorrent source tree. “Present” means the main workflow is available in qBitX; “Partial” records a known limitation or a smaller workflow that still needs review. The Web API cannot expose every internal Qt behavior, so a native screen alone does not establish exact parity.
 
-The comparison uses `src/gui/mainwindow.ui`, `src/gui/transferlistwidget.cpp`, `src/gui/transferlistmodel.h`, `src/gui/properties/`, `src/gui/optionsdialog.ui`, `src/gui/search/`, and `src/gui/rss/`. The native implementation is under `native/macos/Sources/qBitX/`. This inventory is grouped by user workflow rather than listing every label in every dialog. Platform-specific actions still need a macOS behavior decision.
-
-| Original desktop workflow | qBitX status | Gap |
+| Original desktop workflow | qBitX status | Current coverage and remaining work |
 | --- | --- | --- |
-| Add torrent file or link | Partial | The add dialog offers save path, category, tags, stopped state, download order, management, and speed limits. Content preview and file selection before adding remain absent. |
-| Start, stop, remove torrent | Present | Multi-selection and batch actions are available. |
-| Transfer table | Partial | All 38 Qt transfer fields are available as customizable columns. Additional original column behavior and sort modes need review. |
-| Status, category, tag, tracker filters | Partial | Basic filtering works; original has additional filter behavior and category/tag management. |
-| Torrent context menu | Partial | Force start, recheck, reannounce, move location, rename, export `.torrent`, copy, and torrent options are exposed. Preview and share limits remain absent. |
-| Queue management | Present | Move to top, up, down, or bottom is available. |
-| Torrent behavior switches | Partial | Sequential download, first/last piece priority, automatic management, and super seeding are available. Per-torrent share limits remain absent. |
-| Global session and speeds | Partial | Pause/resume and normal/alternative speed limits are available. Completion actions remain absent. |
-| General detail | Partial | More metadata, availability, timing, and transfer statistics are shown; some original fields and actions remain absent. |
-| Trackers detail | Partial | Add, edit, remove, and copy are available. Tier management and other tracker actions remain absent. |
-| Peers detail | Partial | Live peers, country flags, client, progress, rates, add, ban, and copy are available. Additional original columns and actions remain absent. |
-| HTTP sources detail | Partial | Add, remove, and copy are available. Editing remains absent. |
-| Content detail | Partial | File priority, selection, and rename are available. Preview remains absent. |
-| Speed detail | Partial | Recent per-torrent rate graph; original graph controls and history options are absent. |
-| Search | Partial | Category and plugin selection, stopping jobs, and plugin install/enable/remove/update are available. Multiple search tabs and history remain absent. A fresh qBitX library has no search plugins installed. |
-| RSS | Partial | Feed edit/remove/refresh, article filtering, and mark-read controls are available. Folders and automatic downloader rules remain absent. |
-| Preferences | Partial | Backend preferences are exposed in nine grouped sections with generic controls. Specialized dialogs, explanations, and validation from the Qt UI remain absent. |
-| Torrent creator | Partial | A native dialog creates v1, v2, or hybrid torrents from a local file or folder. The original creator has more options, task management, and drag-and-drop. |
-| Cookies and plugin management | Partial | Cookie add/edit/remove and search plugin management are available. Other plugin dialogs and original workflow details remain absent. |
-| Statistics and execution log | Partial | Both are available in Settings. Original statistics fields and log controls still need an action-by-action comparison. |
-| UI customization and other menus | Missing | Original toolbar/sidebar/status bar options, lock, and other desktop menu actions are not exposed. |
+| Add torrent file, magnet, or URL | Present | Preview metadata and files, set per-file priorities, save location and incomplete path, category/tags, rename, queue position, seed mode, stop condition, content layout, sequential/first-last priority, speed limits, and stopped/automatic management options before adding. A remote server may not implement the metadata-preview API. |
+| Start, stop, force start, remove | Present | Single and multi-selection commands and confirmation on removal are available. |
+| Transfer table | Present | The 38 Qt transfer fields can be shown, hidden, reordered, and sorted. Numeric fields use numeric sorting. |
+| Status, category, tag, and tracker filters | Partial | All 14 Qt status filters and category/tag/tracker filters are shown with counts. The optional separate tracker-status filter and Qt's hide-zero preference behavior are not mirrored yet. |
+| Category and tag management | Present | Create, edit, and remove categories and tags; category paths and share limits are editable. |
+| Torrent context menu and behavior | Present | Preview, open destination, move/rename, queue controls, recheck/reannounce, sequential and first/last priority, automatic management, super seeding, per-torrent options, copy/export, and remove are exposed. |
+| Global session and speeds | Present | Pause/resume, normal and alternative speed limits, and completion actions are available. macOS sleep/restart/shutdown actions use a native confirmation and system event; hibernate is unavailable on macOS. |
+| General details | Partial | Torrent metadata, transfer totals, availability, timing, and related fields are displayed. Property parity needs a field-by-field runtime audit. |
+| Tracker details | Present | Add, edit, remove, tier changes, move between tiers, and copy are available. Force reannounce is available from the torrent context menu. |
+| Peer details | Present | Country flags and names, IP/port, connection, flags, client and peer ID client, progress, rates, totals, relevance, contribution, and active files are displayed; add, ban, and copy actions are available. Country information depends on the backend's country database. |
+| HTTP sources | Present | Add, edit, remove, and copy are available. |
+| Content details | Present | File priorities and selection, rename, and media preview are available. |
+| Speed details | Present | Download/upload graph toggles and 1-minute through 24-hour ranges are available. History is sampled while qBitX is running and is not persisted across launches. |
+| Search | Present | Search categories and plugins, query history, multiple result tabs, stop, and plugin install/update/enable/remove are available. Search still requires compatible qBittorrent search plugins. |
+| RSS and automatic downloader | Present | Feed/folder management, article actions, rules, enable/disable, rename/clone/remove, matching articles, import/export, category/tags/path, stopped state, layout, and priority options are available. |
+| Preferences | Partial | Backend preferences remain accessible in grouped native settings. Specialized Qt editors, descriptions, validation, and connection-specific behavior need further audit. |
+| Torrent creator | Present | v1/v2/hybrid format, piece size, private mode, source/comment, trackers and web seeds, hidden-file handling, task history, export, and task removal are available. |
+| Cookies and plugin management | Present | Cookie editing and search-plugin management are available. |
+| Statistics and execution log | Present | qBittorrent session statistics fields and log severity/search filters are available. |
+| Menus, toolbar, and window layout | Partial | Toolbar labels, filter sidebar, details pane, status bar, speed in title bar, interface lock, About/help links, and session/tools menus are available. The remaining Qt shortcuts and smaller window-menu actions still need an action-by-action check. |
 
-The original Qt UI may contain more minor actions inside dialogs and context menus than this workflow inventory captures. Full parity requires an action-by-action checklist for those surfaces and runtime verification on macOS. Until each item is implemented or explicitly accepted as a macOS-specific omission, qBitX must be described as a **preview**, not as a replacement with all original features.
+## Verification completed
 
-## Completion gate
+- Clean Swift package build on the macOS 26 SDK.
+- Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, and session statistics. These checks used a temporary qBittorrent profile rather than the user's normal profile.
+- `git diff --check`.
 
-1. Inventory every action and setting from the original macOS Qt app, including context menus and dialogs.
-2. Provide a native control and backend behavior for each item, or record a deliberate macOS exception.
-3. Test each action with an isolated qBittorrent profile and verify that the result persists after restarting both the app and backend.
-4. Verify large torrent lists, multiple selections, active transfers, Search, RSS, and accessibility with the actual macOS app.
+## Remaining parity gate
+
+1. Compare each preference, property field, keyboard shortcut, and context-menu item directly with the running Qt app.
+2. Exercise the native app on macOS with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled.
+3. Record backend-version requirements for API endpoints used by the preview and verify behavior against supported remote qBittorrent versions.
+
+qBitX covers the main transfer, search, RSS, organization, and diagnostic workflows, but this audit remains open until the remaining items above are checked in the running macOS app.
