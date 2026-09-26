@@ -7,26 +7,26 @@ The comparison uses `src/gui/mainwindow.ui`, `src/gui/transferlistwidget.cpp`, `
 
 | Original desktop workflow | qBitX status | Gap |
 | --- | --- | --- |
-| Add torrent file or link | Partial | Adds immediately; original add dialog offers save path, category, tags, content selection, and torrent options before adding. |
-| Start, stop, remove torrent | Partial | Available for one selected torrent; original supports multi-selection and related batch actions. |
-| Transfer table | Partial | qBitX has 9 columns; the Qt transfer model defines 38 columns, plus column visibility and resizing controls. |
+| Add torrent file or link | Partial | The add dialog offers save path, category, tags, stopped state, download order, management, and speed limits. Content preview and file selection before adding remain absent. |
+| Start, stop, remove torrent | Present | Multi-selection and batch actions are available. |
+| Transfer table | Partial | All 38 Qt transfer fields are available as customizable columns. Additional original column behavior and sort modes need review. |
 | Status, category, tag, tracker filters | Partial | Basic filtering works; original has additional filter behavior and category/tag management. |
-| Torrent context menu | Missing | Force start, force recheck, force reannounce, move location, rename, export `.torrent`, preview, content management, copy variants, and torrent-specific options are absent. |
-| Queue management | Missing | Move to top, up, down, or bottom is absent. |
-| Torrent behavior switches | Missing | Sequential download, first/last piece priority, automatic torrent management, super seeding, and per-torrent share limits are absent. |
-| Global session and speeds | Missing | Pause/resume session, global and alternative speed limits, and completion actions are absent. |
-| General detail | Partial | Basic name, status, size, rates, ratio, and path are shown; the original has more metadata, availability, timing, and transfer statistics. |
-| Trackers detail | Partial | Read-only list; add, edit, remove, tier, and tracker actions are absent. |
-| Peers detail | Partial | Live peers, country flags, client, progress, and rates appear; original has additional columns plus add, ban, and copy actions. |
-| HTTP sources detail | Partial | Read-only list; add, edit, remove, and copy actions are absent. |
-| Content detail | Partial | Read-only file list; priority, selection, rename, and preview actions are absent. |
+| Torrent context menu | Partial | Force start, recheck, reannounce, move location, rename, export `.torrent`, copy, and torrent options are exposed. Preview and share limits remain absent. |
+| Queue management | Present | Move to top, up, down, or bottom is available. |
+| Torrent behavior switches | Partial | Sequential download, first/last piece priority, automatic management, and super seeding are available. Per-torrent share limits remain absent. |
+| Global session and speeds | Partial | Pause/resume and normal/alternative speed limits are available. Completion actions remain absent. |
+| General detail | Partial | More metadata, availability, timing, and transfer statistics are shown; some original fields and actions remain absent. |
+| Trackers detail | Partial | Add, edit, remove, and copy are available. Tier management and other tracker actions remain absent. |
+| Peers detail | Partial | Live peers, country flags, client, progress, rates, add, ban, and copy are available. Additional original columns and actions remain absent. |
+| HTTP sources detail | Partial | Add, remove, and copy are available. Editing remains absent. |
+| Content detail | Partial | File priority, selection, and rename are available. Preview remains absent. |
 | Speed detail | Partial | Recent per-torrent rate graph; original graph controls and history options are absent. |
-| Search | Partial | One query and result list; original has category/plugin selection, multiple search tabs, stopping jobs, plugin management, and history. A fresh qBitX library has no search plugins installed. |
-| RSS | Partial | Add/view feeds and add article torrents; original has folders, feed edit/remove, filtering, mark read controls, and automatic downloader rules. |
-| Preferences | Missing | qBitX only offers backend connection settings; original has Behavior, Downloads, Connection, Speed, BitTorrent, Search, RSS, WebUI, and Advanced pages. |
-| Torrent creator | Missing | No native creator dialog. |
-| Cookies and plugin management | Missing | No native management dialogs. |
-| Statistics and execution log | Missing | No native statistics or log views. |
+| Search | Partial | Category and plugin selection, stopping jobs, and plugin install/enable/remove/update are available. Multiple search tabs and history remain absent. A fresh qBitX library has no search plugins installed. |
+| RSS | Partial | Feed edit/remove/refresh, article filtering, and mark-read controls are available. Folders and automatic downloader rules remain absent. |
+| Preferences | Partial | Backend preferences are exposed in nine grouped sections with generic controls. Specialized dialogs, explanations, and validation from the Qt UI remain absent. |
+| Torrent creator | Partial | A native dialog creates v1, v2, or hybrid torrents from a local file or folder. The original creator has more options, task management, and drag-and-drop. |
+| Cookies and plugin management | Partial | Cookie add/edit/remove and search plugin management are available. Other plugin dialogs and original workflow details remain absent. |
+| Statistics and execution log | Partial | Both are available in Settings. Original statistics fields and log controls still need an action-by-action comparison. |
 | UI customization and other menus | Missing | Original toolbar/sidebar/status bar options, lock, and other desktop menu actions are not exposed. |
 
 The original Qt UI may contain more minor actions inside dialogs and context menus than this workflow inventory captures. Full parity requires an action-by-action checklist for those surfaces and runtime verification on macOS. Until each item is implemented or explicitly accepted as a macOS-specific omission, qBitX must be described as a **preview**, not as a replacement with all original features.

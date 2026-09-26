@@ -22,6 +22,6 @@ Use the Settings button to connect to an existing qBittorrent Web UI using an AP
 
 ## Current scope
 
-The Transfers view supports status, category, tag, and tracker filters; adding torrents by URL or file; starting, stopping, and removing torrents; and the General, Trackers, Peers, HTTP Sources, Content, and Speed detail tabs. The Peers tab shows country flags and names when the backend resolves peer countries; qBitX enables this in its own library. The Speed chart shows recent rates for the selected torrent.
+The Transfers view supports status, category, tag, and tracker filters; a customizable 38-column table; a pre-add options dialog for URL or file torrents; multi-selection and batch actions; queue and torrent behavior controls; and the General, Trackers, Peers, HTTP Sources, Content, and Speed detail tabs. The Peers tab shows country flags and names when the backend resolves peer countries; qBitX enables this in its own library. The Speed chart shows recent rates for the selected torrent.
 
-Search uses enabled qBittorrent search plugins. Install the desired plugins in the backend before searching. RSS lists feeds and articles, lets you add feeds, and adds an article's torrent to the library. The preview does not yet expose every preference or management action from the Qt interface.
+Search uses enabled qBittorrent search plugins, which can be installed and managed in the Search view. RSS lists feeds and articles, lets you manage feeds, and adds an article's torrent to the library. Settings includes a local torrent creator, cookies, session speeds, backend preferences, statistics, and the execution log. The preview does not yet expose every preference or management action from the Qt interface.

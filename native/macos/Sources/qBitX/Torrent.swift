@@ -50,6 +50,14 @@ struct Torrent: Identifiable, Sendable {
     let ratio: Double
     let savePath: String
     let state: TorrentState
+    let forceStart: Bool
+    let sequentialDownload: Bool
+    let firstLastPiecePriority: Bool
+    let automaticManagement: Bool
+    let superSeeding: Bool
+    let extra: [String: String]
+
+    func column(_ key: String) -> String { extra[key] ?? "—" }
 
     var size: String { ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file) }
     var downloadRate: String { Self.rate(downloadRateBytes) }
