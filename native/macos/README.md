@@ -2,6 +2,8 @@
 
 qBitX is a SwiftUI interface for a bundled headless qBittorrent backend. It keeps the existing toolbar, filter sidebar, transfer table, lower detail tabs, and status bar, and uses native Liquid Glass controls. By default it uses a separate torrent library under `~/Library/Application Support/qBitX/Backend`. The original qBittorrent profile is untouched.
 
+**Feature parity is incomplete.** See the [feature parity audit](FEATURE_PARITY.md) for the original desktop features that still need native controls.
+
 ## Build and open
 
 Requires Xcode with the macOS 26 SDK or newer, plus Homebrew `cmake`, `ninja`, `qt`, `boost`, `libtorrent-rasterbar`, and `openssl@3`.
