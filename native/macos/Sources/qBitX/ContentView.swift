@@ -389,7 +389,9 @@ struct ContentView: View {
             extraColumnsTwo
             extraColumnsThree
         }
-        .contextMenu { torrentContextMenu }
+        .contextMenu(forSelectionType: String.self) { target in
+            torrentContextMenu(for: target)
+        }
         .overlay {
             if !store.isConnected {
                 VStack(spacing: 12) {
@@ -784,61 +786,68 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var torrentContextMenu: some View {
-        Button("Start") { runBulkAction { try await store.command(.start, hashes: $0) } }
-        Button("Stop") { runBulkAction { try await store.command(.stop, hashes: $0) } }
+    @ViewBuilder private func torrentContextMenu(for target: Set<String>) -> some View {
+        let hashes = target.sorted()
+        let targetTorrent = torrents.first { target.contains($0.id) }
+        Button("Start") { runBulkAction(hashes: hashes) { try await store.command(.start, hashes: $0) } }
+        Button("Stop") { runBulkAction(hashes: hashes) { try await store.command(.stop, hashes: $0) } }
         Toggle("Force Start", isOn: Binding(
-            get: { selectedTorrent?.forceStart ?? false },
-            set: { value in runBulkAction { try await store.setForceStart(value, hashes: $0) } }
+            get: { targetTorrent?.forceStart ?? false },
+            set: { value in runBulkAction(hashes: hashes) { try await store.setForceStart(value, hashes: $0) } }
         ))
         Divider()
-        Button("Rename…") { textAction = .rename }.disabled(selectedTorrentIDs.count != 1)
-        Button("Set Location…") { textAction = .location }
-        Button("Set Category…") { textAction = .category }
-        Button("Set Tags…") { textAction = .tags }
+        Button("Rename…") { beginTextAction(.rename, target: target) }.disabled(hashes.count != 1)
+        Button("Set Location…") { beginTextAction(.location, target: target) }
+        Button("Set Category…") { beginTextAction(.category, target: target) }
+        Button("Set Tags…") { beginTextAction(.tags, target: target) }
         Menu("Queue") {
-            Button("Move to Top") { runBulkAction { try await store.command(.topPrio, hashes: $0) } }
-            Button("Move Up") { runBulkAction { try await store.command(.increasePrio, hashes: $0) } }
-            Button("Move Down") { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } }
-            Button("Move to Bottom") { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } }
+            Button("Move to Top") { runBulkAction(hashes: hashes) { try await store.command(.topPrio, hashes: $0) } }
+            Button("Move Up") { runBulkAction(hashes: hashes) { try await store.command(.increasePrio, hashes: $0) } }
+            Button("Move Down") { runBulkAction(hashes: hashes) { try await store.command(.decreasePrio, hashes: $0) } }
+            Button("Move to Bottom") { runBulkAction(hashes: hashes) { try await store.command(.bottomPrio, hashes: $0) } }
         }
         Divider()
-        Button("Force Recheck") { runBulkAction { try await store.command(.recheck, hashes: $0) } }
-        Button("Force Reannounce") { runBulkAction { try await store.command(.reannounce, hashes: $0) } }
+        Button("Force Recheck") { runBulkAction(hashes: hashes) { try await store.command(.recheck, hashes: $0) } }
+        Button("Force Reannounce") { runBulkAction(hashes: hashes) { try await store.command(.reannounce, hashes: $0) } }
         Divider()
         Toggle("Sequential Download", isOn: Binding(
-            get: { selectedTorrent?.sequentialDownload ?? false },
-            set: { _ in runBulkAction { try await store.command(.toggleSequentialDownload, hashes: $0) } }
+            get: { targetTorrent?.sequentialDownload ?? false },
+            set: { _ in runBulkAction(hashes: hashes) { try await store.command(.toggleSequentialDownload, hashes: $0) } }
         ))
         Toggle("First and Last Pieces First", isOn: Binding(
-            get: { selectedTorrent?.firstLastPiecePriority ?? false },
-            set: { _ in runBulkAction { try await store.command(.toggleFirstLastPiecePrio, hashes: $0) } }
+            get: { targetTorrent?.firstLastPiecePriority ?? false },
+            set: { _ in runBulkAction(hashes: hashes) { try await store.command(.toggleFirstLastPiecePrio, hashes: $0) } }
         ))
         Toggle("Automatic Torrent Management", isOn: Binding(
-            get: { selectedTorrent?.automaticManagement ?? false },
-            set: { value in runBulkAction { try await store.setAutomaticManagement(value, hashes: $0) } }
+            get: { targetTorrent?.automaticManagement ?? false },
+            set: { value in runBulkAction(hashes: hashes) { try await store.setAutomaticManagement(value, hashes: $0) } }
         ))
         Toggle("Super Seeding", isOn: Binding(
-            get: { selectedTorrent?.superSeeding ?? false },
-            set: { value in runBulkAction { try await store.setSuperSeeding(value, hashes: $0) } }
+            get: { targetTorrent?.superSeeding ?? false },
+            set: { value in runBulkAction(hashes: hashes) { try await store.setSuperSeeding(value, hashes: $0) } }
         ))
         Menu("Copy") {
-            Button("Names") { copySelectedTorrents(\.name) }
-            Button("Torrent IDs") { copySelectedTorrents(\.id) }
-            Button("Save Paths") { copySelectedTorrents(\.savePath) }
+            Button("Names") { copySelectedTorrents(\.name, target: target) }
+            Button("Torrent IDs") { copySelectedTorrents(\.id, target: target) }
+            Button("Save Paths") { copySelectedTorrents(\.savePath, target: target) }
         }
-        Button("Export .torrent…") { exportSelectedTorrent() }.disabled(selectedTorrentIDs.count != 1)
+        Button("Export .torrent…") { exportSelectedTorrent(hash: hashes.first) }.disabled(hashes.count != 1)
         Divider()
-        Button("Remove…", role: .destructive) { showsRemoveConfirmation = true }
+        Button("Remove…", role: .destructive) { selectedTorrentIDs = target; showsRemoveConfirmation = true }
     }
 
-    private func runBulkAction(_ action: @escaping ([String]) async throws -> Void) {
-        let hashes = selectedHashes
+    private func runBulkAction(hashes: [String]? = nil, _ action: @escaping ([String]) async throws -> Void) {
+        let hashes = hashes ?? selectedHashes
         guard !hashes.isEmpty else { return }
         Task {
             do { try await action(hashes) }
             catch { actionError = error.localizedDescription }
         }
+    }
+
+    private func beginTextAction(_ action: TorrentTextAction, target: Set<String>) {
+        selectedTorrentIDs = target
+        textAction = action
     }
 
     private func removeSelectedTorrent(deleteFiles: Bool) {
@@ -916,14 +925,14 @@ struct ContentView: View {
         }
     }
 
-    private func copySelectedTorrents(_ keyPath: KeyPath<Torrent, String>) {
-        let value = torrents.filter { selectedTorrentIDs.contains($0.id) }.map { $0[keyPath: keyPath] }.joined(separator: "\n")
+    private func copySelectedTorrents(_ keyPath: KeyPath<Torrent, String>, target: Set<String>) {
+        let value = torrents.filter { target.contains($0.id) }.map { $0[keyPath: keyPath] }.joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
     }
 
-    private func exportSelectedTorrent() {
-        guard let torrent = selectedTorrent else { return }
+    private func exportSelectedTorrent(hash: String?) {
+        guard let torrent = torrents.first(where: { $0.id == hash }) else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = torrent.name + ".torrent"
         panel.allowedContentTypes = [UTType(filenameExtension: "torrent") ?? .data]
