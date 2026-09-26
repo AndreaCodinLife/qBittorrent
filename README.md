@@ -1,5 +1,9 @@
 # qBittorrent - A BitTorrent client in Qt
 
+## qBitX macOS preview
+
+This fork includes [qBitX](native/macos/README.md), a native SwiftUI interface using macOS Liquid Glass while retaining qBittorrent's familiar layout. It bundles the headless qBittorrent engine and uses a separate library by default. See the linked guide for build requirements and current scope.
+
 [![GitHub Actions CI Status](https://github.com/qbittorrent/qBittorrent/actions/workflows/ci_ubuntu.yaml/badge.svg)](https://github.com/qbittorrent/qBittorrent/actions)
 [![Coverity Status](https://scan.coverity.com/projects/5494/badge.svg)](https://scan.coverity.com/projects/5494)
 
