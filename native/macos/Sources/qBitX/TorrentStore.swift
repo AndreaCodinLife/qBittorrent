@@ -36,6 +36,7 @@ final class TorrentStore {
                 connectionName = saved.address
             } else {
                 connectedAPI = try await backend.connect()
+                try await connectedAPI.enablePeerCountries()
                 connectionName = "Local library"
             }
             serverVersion = try await connectedAPI.verify()

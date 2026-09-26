@@ -66,6 +66,15 @@ actor QBittorrentAPI {
         )
     }
 
+    func enablePeerCountries() async throws {
+        let data = try await request("app/preferences")
+        let preferences = try JSONDecoder().decode(PeerCountryPreferences.self, from: data)
+        guard !preferences.resolve_peer_countries else { return }
+        _ = try await request("app/setPreferences", method: "POST", form: [
+            "json": "{\"resolve_peer_countries\":true}"
+        ])
+    }
+
     func properties(for hash: String) async throws -> TorrentProperties {
         let data = try await request("torrents/properties", query: ["hash": hash])
         return try JSONDecoder().decode(TorrentProperties.self, from: data)
@@ -281,6 +290,10 @@ private struct TransferResponse: Decodable {
     let connection_status: String?
 }
 
+private struct PeerCountryPreferences: Decodable {
+    let resolve_peer_countries: Bool
+}
+
 struct TorrentProperties: Decodable, Sendable {
     let total_downloaded: Int64?
     let total_uploaded: Int64?
@@ -326,7 +339,16 @@ struct TorrentPeer: Decodable, Identifiable, Sendable {
     let dl_speed: Int64?
     let up_speed: Int64?
     let country: String?
+    let country_code: String?
     var id: String { "\(ip):\(port ?? 0)" }
+    var countryName: String { country.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown" }
+
+    var countryFlag: String? {
+        guard let country_code else { return nil }
+        let letters = Array(country_code.uppercased().utf8)
+        guard letters.count == 2, letters.allSatisfy({ (65...90).contains($0) }) else { return nil }
+        return String(String.UnicodeScalarView(letters.map { UnicodeScalar(127397 + Int($0))! }))
+    }
 }
 
 struct SearchPlugin: Decodable, Identifiable, Sendable {

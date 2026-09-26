@@ -464,6 +464,17 @@ struct ContentView: View {
     private var peerDetails: some View {
         List(peers) { peer in
             HStack(spacing: 16) {
+                HStack(spacing: 6) {
+                    if let flag = peer.countryFlag {
+                        Text(flag).font(.body)
+                    } else {
+                        Image(systemName: "globe").foregroundStyle(.tertiary)
+                    }
+                    Text(peer.countryName)
+                        .lineLimit(1)
+                }
+                .frame(width: 150, alignment: .leading)
+                .help(peer.countryName)
                 Text("\(peer.ip):\(peer.port ?? 0)").frame(minWidth: 150, alignment: .leading)
                 Text(peer.client ?? "Unknown client").frame(minWidth: 120, alignment: .leading)
                 Text((peer.progress ?? 0).formatted(.percent.precision(.fractionLength(0))))
@@ -518,7 +529,11 @@ struct ContentView: View {
             case .general: properties = try await store.properties(for: selectedTorrentID)
             case .trackers: trackers = try await store.trackers(for: selectedTorrentID)
             case .content: files = try await store.files(for: selectedTorrentID)
-            case .peers: peers = try await store.peers(for: selectedTorrentID)
+            case .peers:
+                while !Task.isCancelled {
+                    peers = try await store.peers(for: selectedTorrentID)
+                    try await Task.sleep(for: .seconds(2))
+                }
             case .httpSources: webSeeds = try await store.webSeeds(for: selectedTorrentID)
             default: break
             }
