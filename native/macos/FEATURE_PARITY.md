@@ -17,17 +17,17 @@ This checklist compares the native macOS preview with the desktop workflows in t
 | HTTP sources | Present | Add, edit, remove, and copy are available. |
 | Content details | Present | Name, size, availability, progress, and priority are displayed. Multiple files can be selected for priority changes; rename and media preview are available. |
 | Speed details | Present | The session graph includes total, payload, overhead, DHT, and tracker rates in both directions, with per-series toggles and 1-minute through 24-hour ranges. History is sampled while qBitX is running and is not persisted across launches. |
-| Search | Present | Search categories and plugins, query history, multiple result tabs, stop, and plugin install/update/enable/remove are available. Search still requires compatible qBittorrent search plugins. |
+| Search | Present | Search categories and plugins, query history, concurrent result tabs with per-tab stop, name-only/everywhere query filtering, wildcard/regex text filtering, seed-count and size filters, sortable and customizable result columns, batch download and add-options windows, description-page opening, copy links, and plugin install/update/enable/remove are available. Plugin results use the selected engine for metadata preview and add options. Search still requires compatible qBittorrent search plugins. |
 | RSS and automatic downloader | Present | Feed/folder management, article actions, rules, enable/disable, rename/clone/remove, matching articles, import/export, category/tags/path, stopped state, layout, and priority options are available. |
 | Preferences | Partial | Backend preferences remain accessible in grouped native settings. Specialized Qt editors, descriptions, validation, and connection-specific behavior need further audit. |
 | Torrent creator | Present | v1/v2/hybrid format, piece size, private mode, source/comment, trackers and web seeds, hidden-file handling, task history, export, and task removal are available. |
 | Cookies and plugin management | Present | Cookie editing and search-plugin management are available. |
 | Statistics and execution log | Present | qBittorrent session statistics fields and log severity/search filters are available. |
-| Menus, toolbar, and window layout | Present | Toolbar visibility and label style, filter sidebar, details pane, status bar, speed in title bar, interface lock, About/help links, and session/tools menus are available. Native File, Transfers, Navigate, and Settings commands include macOS keyboard shortcuts for core actions. |
+| Menus, toolbar, and window layout | Present | Toolbar visibility and label style, queue controls, filter sidebar, details pane, status bar, speed in title bar, interface lock, About/help links, and session/tools menus are available. Native File, Transfers, Navigate, and Settings commands include macOS keyboard shortcuts for core actions, including adding links from the clipboard. |
 
 ## Verification completed
 
-- Swift package build on the macOS 26 SDK and C++ backend build.
+- Swift package debug and release builds targeting macOS 26, plus the C++ backend build.
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
 - `git diff --check`.
 

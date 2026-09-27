@@ -285,6 +285,7 @@ struct ContentView: View {
         .focusedSceneValue(\.qBitXCommandActions, QBitXCommandActions(
             addTorrentFile: { showsFileImporter = true },
             addTorrentURL: { showsURLSheet = true },
+            pasteTorrentLinks: pasteTorrentLinks,
             createTorrent: { showsTorrentCreator = true },
             removeSelected: { if !selectedTorrentIDs.isEmpty { showsRemoveConfirmation = true } },
             startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
@@ -304,15 +305,19 @@ struct ContentView: View {
             selectTransfers: { mainTab = .transfers },
             selectSearch: { mainTab = .search },
             selectRSS: { mainTab = .rss },
-            showExecutionLog: { showsExecutionLog = true }
+            showExecutionLog: { showsExecutionLog = true },
+            openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
+            checkForUpdates: { openURL("https://github.com/AndreaCodinLife/qBittorrent/releases") },
+            donate: { openURL("https://www.qbittorrent.org/donate") },
+            showAbout: { showsAbout = true }
         ))
         .sheet(isPresented: $showsURLSheet) {
-            AddTorrentSheet(file: nil, store: store) { url, options in
-                try await store.add(url: url, options: options)
+            AddTorrentSheet(file: nil, store: store) { url, downloader, options in
+                try await store.add(url: url, downloader: downloader, options: options)
             }
         }
         .sheet(item: $pendingTorrentFile) { file in
-            AddTorrentSheet(file: file, store: store) { source, options in
+            AddTorrentSheet(file: file, store: store) { source, _, options in
                 if source.hasPrefix("magnet:") {
                     try await store.add(url: source, options: options)
                 } else {
@@ -424,6 +429,22 @@ struct ContentView: View {
                 .disabled(selectedTorrent == nil)
 
                 Menu {
+                    Button("Move to Top") { runBulkAction { try await store.command(.topPrio, hashes: $0) } }
+                    Button("Move Up") { runBulkAction { try await store.command(.increasePrio, hashes: $0) } }
+                    Button("Move Down") { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } }
+                    Button("Move to Bottom") { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } }
+                } label: {
+                    toolbarLabel("Queue", image: "arrow.up.arrow.down")
+                }
+                .disabled(selectedTorrent == nil)
+
+                Button { showsTorrentCreator = true } label: {
+                    toolbarLabel("Create Torrent", image: "doc.badge.plus")
+                }
+                .disabled(!store.usesBundledBackend)
+                .help("Create a .torrent file")
+
+                Menu {
                     Button("Pause Session") { setSessionPaused(true) }
                     Button("Resume Session") { setSessionPaused(false) }
                     Divider()
@@ -500,6 +521,41 @@ struct ContentView: View {
     private func openURL(_ value: String) {
         guard let url = URL(string: value) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func pasteTorrentLinks() {
+        guard let clipboard = NSPasteboard.general.string(forType: .string) else { return }
+        let links = clipboard.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && (isTorrentLink($0) || localTorrentURL($0) != nil) }
+        guard !links.isEmpty else { return }
+        Task {
+            for link in links {
+                do {
+                    if let fileURL = localTorrentURL(link) {
+                        let access = fileURL.startAccessingSecurityScopedResource()
+                        defer { if access { fileURL.stopAccessingSecurityScopedResource() } }
+                        try await store.add(file: Data(contentsOf: fileURL), filename: fileURL.lastPathComponent)
+                    } else {
+                        try await store.add(url: link)
+                    }
+                }
+                catch { actionError = error.localizedDescription; return }
+            }
+        }
+    }
+
+    private func localTorrentURL(_ value: String) -> URL? {
+        let url = value.lowercased().hasPrefix("file:") ? URL(string: value) : URL(fileURLWithPath: value)
+        guard let url, url.isFileURL, url.pathExtension.lowercased() == "torrent",
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private func isTorrentLink(_ value: String) -> Bool {
+        if value.lowercased().hasPrefix("magnet:") { return true }
+        guard let scheme = URLComponents(string: value)?.scheme?.lowercased() else { return false }
+        return ["http", "https", "ftp"].contains(scheme)
     }
 
     private var viewToolbarMenu: some View {
@@ -1978,7 +2034,7 @@ private struct ValueSheet: View {
     }
 }
 
-private struct PendingTorrentFile: Identifiable {
+struct PendingTorrentFile: Identifiable {
     let id = UUID()
     let name: String
     let data: Data
@@ -2018,12 +2074,14 @@ private struct AboutView: View {
     }
 }
 
-private struct AddTorrentSheet: View {
+struct AddTorrentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("qBitX.addTorrentDefaultCategory") private var defaultCategory = ""
     let file: PendingTorrentFile?
     let store: TorrentStore
-    let onAdd: (String, TorrentAddOptions) async throws -> Void
+    let initialURL: String
+    let initialDownloader: String?
+    let onAdd: (String, String?, TorrentAddOptions) async throws -> Void
     @State private var url = ""
     @State private var savePath = ""
     @State private var downloadPathEnabled = false
@@ -2048,6 +2106,15 @@ private struct AddTorrentSheet: View {
     @State private var isLoadingMetadata = false
     @State private var errorMessage: String?
     @State private var isAdding = false
+
+    init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Void) {
+        self.file = file
+        self.store = store
+        self.initialURL = initialURL
+        self.initialDownloader = initialDownloader
+        self.onAdd = onAdd
+        _url = State(initialValue: initialURL)
+    }
 
     private var files: [TorrentMetadataFile] { metadata?.info?.files ?? [] }
     private var filteredFileIndices: [Int] {
@@ -2200,7 +2267,7 @@ private struct AddTorrentSheet: View {
                             options.filePriorities = files.isEmpty ? nil : filePriorities
                             let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
                             if setDefaultCategory { defaultCategory = options.category }
-                            try await onAdd(source, options)
+                            try await onAdd(source, initialDownloader, options)
                             dismiss()
                         } catch {
                             errorMessage = error.localizedDescription
@@ -2217,7 +2284,7 @@ private struct AddTorrentSheet: View {
         .frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 760)
         .task {
             if category.isEmpty { category = defaultCategory }
-            if file != nil { await loadMetadata() }
+            if file != nil || !initialURL.isEmpty { await loadMetadata() }
         }
     }
 
@@ -2231,7 +2298,7 @@ private struct AddTorrentSheet: View {
             if let file {
                 fetched = try await store.parseTorrentMetadata(file: file.data, filename: file.name)
             } else {
-                fetched = try await store.fetchTorrentMetadata(source: url.trimmingCharacters(in: .whitespacesAndNewlines))
+                fetched = try await store.fetchTorrentMetadata(source: url.trimmingCharacters(in: .whitespacesAndNewlines), downloader: initialDownloader)
             }
             metadata = fetched
             filePriorities = (fetched.info?.files ?? []).map { $0.priority ?? 1 }

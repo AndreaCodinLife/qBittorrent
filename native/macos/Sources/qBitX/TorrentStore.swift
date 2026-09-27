@@ -302,9 +302,9 @@ final class TorrentStore {
         await refresh()
     }
 
-    func add(url: String, options: TorrentAddOptions = TorrentAddOptions()) async throws {
+    func add(url: String, downloader: String? = nil, options: TorrentAddOptions = TorrentAddOptions()) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.add(url: url, options: options)
+        try await api.add(url: url, downloader: downloader, options: options)
         await refresh()
     }
 
@@ -319,9 +319,9 @@ final class TorrentStore {
         return try await api.parseTorrentMetadata(file: data, filename: filename)
     }
 
-    func fetchTorrentMetadata(source: String) async throws -> TorrentMetadata {
+    func fetchTorrentMetadata(source: String, downloader: String? = nil) async throws -> TorrentMetadata {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.fetchTorrentMetadata(source: source)
+        return try await api.fetchTorrentMetadata(source: source, downloader: downloader)
     }
 
     func saveTorrentMetadata(source: String) async throws -> Data {

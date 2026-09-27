@@ -3,6 +3,7 @@ import SwiftUI
 struct QBitXCommandActions {
     var addTorrentFile: () -> Void
     var addTorrentURL: () -> Void
+    var pasteTorrentLinks: () -> Void
     var createTorrent: () -> Void
     var removeSelected: () -> Void
     var startSelected: () -> Void
@@ -23,6 +24,10 @@ struct QBitXCommandActions {
     var selectSearch: () -> Void
     var selectRSS: () -> Void
     var showExecutionLog: () -> Void
+    var openDocumentation: () -> Void
+    var checkForUpdates: () -> Void
+    var donate: () -> Void
+    var showAbout: () -> Void
 }
 
 private struct QBitXCommandActionsKey: FocusedValueKey {
@@ -47,6 +52,8 @@ struct QBitXCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Create Torrent…", action: action(\.createTorrent))
                 .keyboardShortcut("n", modifiers: .command)
+            Button("Add Torrent Links from Clipboard") { actions?.pasteTorrentLinks() }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
         }
 
         CommandMenu("Transfers") {
@@ -94,6 +101,16 @@ struct QBitXCommands: Commands {
                 .keyboardShortcut("o", modifiers: .option)
             Button("Speed Limits…") { actions?.showSpeedLimits() }
             Button("Statistics…") { actions?.showStatistics() }
+        }
+
+        CommandGroup(replacing: .help) {
+            Button("qBittorrent Documentation") { actions?.openDocumentation() }
+            Button("Check for Updates…") { actions?.checkForUpdates() }
+            Button("Donate to qBittorrent") { actions?.donate() }
+        }
+
+        CommandGroup(replacing: .appInfo) {
+            Button("About qBitX…") { actions?.showAbout() }
         }
     }
 

@@ -618,10 +618,11 @@ actor QBittorrentAPI {
         ])
     }
 
-    func add(url: String, options: TorrentAddOptions = TorrentAddOptions()) async throws {
+    func add(url: String, downloader: String? = nil, options: TorrentAddOptions = TorrentAddOptions()) async throws {
         try await ensureCategory(options.category)
         var form = options.form
         form["urls"] = url
+        if let downloader, !downloader.isEmpty { form["downloader"] = downloader }
         let data = try await request("torrents/add", method: "POST", form: form)
         try checkAddResult(data)
     }
@@ -653,9 +654,11 @@ actor QBittorrentAPI {
         return metadata
     }
 
-    func fetchTorrentMetadata(source: String) async throws -> TorrentMetadata {
+    func fetchTorrentMetadata(source: String, downloader: String? = nil) async throws -> TorrentMetadata {
         for _ in 0..<60 {
-            let response = try await request("torrents/fetchMetadata", method: "POST", form: ["source": source])
+            var form = ["source": source]
+            if let downloader, !downloader.isEmpty { form["downloader"] = downloader }
+            let response = try await request("torrents/fetchMetadata", method: "POST", form: form)
             let metadata = try JSONDecoder().decode(TorrentMetadata.self, from: response)
             if metadata.info != nil { return metadata }
             try await Task.sleep(for: .seconds(1))
@@ -1029,7 +1032,27 @@ struct SearchResult: Decodable, Identifiable, Sendable {
     let nbSeeders: Int
     let nbLeechers: Int
     let engineName: String
+    let siteUrl: String
+    let descrLink: String
+    let pubDate: Int64
     var id: String { "\(engineName)|\(fileUrl)" }
+
+    private enum CodingKeys: String, CodingKey {
+        case fileName, fileUrl, fileSize, nbSeeders, nbLeechers, engineName, siteUrl, descrLink, pubDate
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        fileName = try values.decodeIfPresent(String.self, forKey: .fileName) ?? ""
+        fileUrl = try values.decodeIfPresent(String.self, forKey: .fileUrl) ?? ""
+        fileSize = try values.decodeIfPresent(Int64.self, forKey: .fileSize) ?? 0
+        nbSeeders = try values.decodeIfPresent(Int.self, forKey: .nbSeeders) ?? 0
+        nbLeechers = try values.decodeIfPresent(Int.self, forKey: .nbLeechers) ?? 0
+        engineName = try values.decodeIfPresent(String.self, forKey: .engineName) ?? ""
+        siteUrl = try values.decodeIfPresent(String.self, forKey: .siteUrl) ?? ""
+        descrLink = try values.decodeIfPresent(String.self, forKey: .descrLink) ?? ""
+        pubDate = try values.decodeIfPresent(Int64.self, forKey: .pubDate) ?? 0
+    }
 }
 
 struct RSSFeed: Identifiable, Sendable {
