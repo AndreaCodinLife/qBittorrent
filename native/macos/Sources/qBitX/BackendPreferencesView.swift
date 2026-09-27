@@ -14,6 +14,7 @@ private struct PreferenceItem: Identifiable {
     let original: String
 
     var isDirty: Bool { draft != original }
+    var explanation: String { Self.explanation(for: id) }
 
     func encodedValue() throws -> String {
         switch kind {
@@ -57,12 +58,57 @@ private struct PreferenceItem: Identifiable {
         return PreferenceItem(
             id: key,
             section: section(for: key),
-            label: key.replacingOccurrences(of: "_", with: " ").capitalized,
+            label: label(for: key),
             kind: kind,
             readOnly: sensitive || managed,
             draft: shownValue,
             original: shownValue
         )
+    }
+
+    private static func label(for key: String) -> String {
+        let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
+        return key.split(separator: "_").map { word in
+            let value = String(word)
+            return acronyms.contains(value.lowercased()) ? value.uppercased() : value.capitalized
+        }.joined(separator: " ")
+    }
+
+    private static func explanation(for key: String) -> String {
+        let descriptions: [String: String] = [
+            "dht": "Find peers through the distributed hash table when a torrent has no reachable tracker.",
+            "pex": "Exchange peer addresses with peers connected to the same torrent.",
+            "lsd": "Discover BitTorrent peers on the local network.",
+            "encryption": "Choose whether BitTorrent protocol encryption is allowed, preferred, or required.",
+            "upnp": "Ask the router to forward the listening port automatically.",
+            "listen_port": "Port used for incoming BitTorrent connections.",
+            "random_port": "Choose a different listening port when the client starts.",
+            "max_connec": "Maximum number of peer connections across the session.",
+            "max_connec_per_torrent": "Maximum number of peer connections for each torrent.",
+            "max_active_downloads": "Maximum number of torrents allowed to download at the same time.",
+            "max_active_uploads": "Maximum number of torrents allowed to seed at the same time.",
+            "max_active_torrents": "Maximum number of active torrents in the queue.",
+            "dl_limit": "Global download speed limit in bytes per second; zero means unlimited.",
+            "up_limit": "Global upload speed limit in bytes per second; zero means unlimited.",
+            "alt_dl_limit": "Alternative download speed limit in bytes per second.",
+            "alt_up_limit": "Alternative upload speed limit in bytes per second.",
+            "save_path": "Default folder for newly added torrent data.",
+            "temp_path": "Folder used for incomplete torrent data when enabled.",
+            "temp_path_enabled": "Store incomplete torrent data in a separate temporary folder.",
+            "preallocate_all": "Allocate the full disk space for torrent files before downloading them.",
+            "auto_tmm_enabled": "Let qBittorrent choose torrent paths from category and content rules.",
+            "incomplete_files_ext": "Append an extension to files that are still downloading.",
+            "web_ui_address": "Network interface address where the Web UI listens.",
+            "web_ui_port": "TCP port used by the Web UI.",
+            "web_ui_username": "Username required to sign in to the Web UI.",
+            "use_https": "Serve the Web UI over HTTPS using the configured certificate.",
+            "rss_refresh_interval": "How often qBittorrent checks RSS feeds for new articles.",
+            "rss_auto_downloader_enabled": "Enable RSS rules that automatically add matching torrents.",
+            "search_enabled": "Enable the search tab and search plugins.",
+            "confirm_torrent_deletion": "Ask before removing a torrent from the session.",
+            "locale": "Language used by the qBittorrent backend and its Web UI."
+        ]
+        return descriptions[key] ?? "Backend preference key: \(key). The qBittorrent Web API validates the value when saved."
     }
 
     private static func section(for key: String) -> String {
@@ -102,7 +148,7 @@ struct BackendPreferencesView: View {
         } detail: {
             VStack(spacing: 0) {
                 HStack {
-                    Text(section).font(.title2.weight(.semibold))
+                    Text(searchText.isEmpty ? section : "Search Results").font(.title2.weight(.semibold))
                     Spacer()
                     TextField("Find setting…", text: $searchText)
                         .textFieldStyle(.roundedBorder).frame(width: 180)
@@ -115,13 +161,16 @@ struct BackendPreferencesView: View {
                 }
                 List {
                     ForEach($items) { $item in
-                        if item.section == section && (searchText.isEmpty || item.id.localizedCaseInsensitiveContains(searchText) || item.label.localizedCaseInsensitiveContains(searchText)) {
+                        if (searchText.isEmpty ? item.section == section : true)
+                            && (searchText.isEmpty || item.id.localizedCaseInsensitiveContains(searchText) || item.label.localizedCaseInsensitiveContains(searchText) || item.explanation.localizedCaseInsensitiveContains(searchText)) {
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.label).font(.subheadline)
                                     Text(item.id).font(.caption2).foregroundStyle(.tertiary)
+                                    Text(item.explanation).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                    if !searchText.isEmpty { Text(item.section).font(.caption2.weight(.medium)).foregroundStyle(.tint) }
                                 }
-                                .frame(width: 190, alignment: .leading)
+                                .frame(width: 250, alignment: .leading)
                                 Spacer(minLength: 10)
                                 if item.kind == .boolean && !item.readOnly {
                                     Toggle("", isOn: Binding(

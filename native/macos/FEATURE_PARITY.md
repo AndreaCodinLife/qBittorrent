@@ -19,7 +19,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 | Speed details | Present | The session graph includes total, payload, overhead, DHT, and tracker rates in both directions, with per-series toggles and 1-minute through 24-hour ranges. History is sampled while qBitX is running and is not persisted across launches. |
 | Search | Present | Search categories and plugins, query history, concurrent result tabs with per-tab stop, name-only/everywhere query filtering, wildcard/regex text filtering, seed-count and size filters, sortable and customizable result columns, batch download and add-options windows, description-page opening, copy links, and plugin install/update/enable/remove are available. Plugin results use the selected engine for metadata preview and add options. Search still requires compatible qBittorrent search plugins. |
 | RSS and automatic downloader | Present | Feed/folder management, article actions, rules, enable/disable, rename/clone/remove, matching articles, import/export, category/tags/path, stopped state, layout, and priority options are available. |
-| Preferences | Partial | Backend preferences remain accessible in grouped native settings. Specialized Qt editors, descriptions, validation, and connection-specific behavior need further audit. |
+| Preferences | Partial | All Web API-exposed backend preferences are searchable across sections and editable with type-aware controls and qBittorrent-side validation. Common settings include explanations; specialized Qt controls and help for less common keys still need a preference-by-preference audit. |
 | Torrent creator | Present | v1/v2/hybrid format, piece size, private mode, source/comment, trackers and web seeds, hidden-file handling, task history, export, and task removal are available. |
 | Cookies and plugin management | Present | Cookie editing and search-plugin management are available. |
 | Statistics and execution log | Present | qBittorrent session statistics fields and log severity/search filters are available. |
@@ -40,7 +40,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 ## Remaining parity gate
 
 1. Exercise the packaged native app on macOS with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled.
-2. Finish a preference-by-preference comparison with the Qt options dialog; the generic native preference editor still lacks some specialized explanations and validation.
+2. Finish a preference-by-preference comparison with the Qt options dialog; the native editor covers the API-exposed values but some specialized controls and explanations remain less detailed.
 3. Exercise graceful degradation against older remote qBittorrent versions, including missing tracker summaries and unsupported API actions.
 
 The source and isolated API checks cover the main transfer, search, RSS, organization, and diagnostic workflows. This audit remains open until the packaged macOS UI, accessibility, backend compatibility, and specialized preference screens are checked.
