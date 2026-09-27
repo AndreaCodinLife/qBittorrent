@@ -57,6 +57,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
     <string>26.0</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>qBitX uses macOS system events to perform a power action you selected after downloads complete.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>qBitX uses your local network to discover peers for torrents you add.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

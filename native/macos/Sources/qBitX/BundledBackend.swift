@@ -18,10 +18,17 @@ enum BackendError: LocalizedError {
 @MainActor
 final class BundledBackend {
     private var process: Process?
-    private let port = 18567
+    private var port: Int {
+        guard let configured = ProcessInfo.processInfo.environment["QBITX_TEST_BACKEND_PORT"],
+              let port = Int(configured), (1024...65_535).contains(port) else { return 18567 }
+        return port
+    }
 
     private var root: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if let testRoot = ProcessInfo.processInfo.environment["QBITX_TEST_BACKEND_ROOT"], testRoot.hasPrefix("/") {
+            return URL(fileURLWithPath: testRoot, isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "qBitX/Backend", directoryHint: .isDirectory)
     }
 

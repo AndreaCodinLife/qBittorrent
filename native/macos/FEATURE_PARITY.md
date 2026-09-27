@@ -28,6 +28,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 ## Verification completed
 
 - Swift package debug and release builds targeting macOS 26, plus the C++ backend build.
+- Packaged UI smoke test against a fresh `/tmp` backend profile and separate port; the app reached the connected state and displayed Web API 2.16.2.
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
 - `git diff --check`.
 
@@ -39,7 +40,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 
 ## Remaining parity gate
 
-1. Exercise the packaged native app on macOS with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled.
+1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled. The smoke test only confirmed launch and connection.
 2. Finish a preference-by-preference comparison with the Qt options dialog; the native editor covers the API-exposed values but some specialized controls and explanations remain less detailed.
 3. Exercise graceful degradation against older remote qBittorrent versions, including missing tracker summaries and unsupported API actions.
 
