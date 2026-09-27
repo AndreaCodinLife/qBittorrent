@@ -4,6 +4,7 @@ import CoreFoundation
 enum APIAuthentication: Sendable {
     case apiKey(String)
     case password(username: String, password: String)
+    case anonymous
 }
 
 enum APIError: LocalizedError {
@@ -26,6 +27,11 @@ enum TorrentCommand: String, Sendable {
     case start, stop, recheck, reannounce
     case increasePrio, decreasePrio, topPrio, bottomPrio
     case toggleSequentialDownload, toggleFirstLastPiecePrio
+}
+
+struct NetworkInterfaceOption: Decodable, Sendable {
+    let name: String
+    let value: String
 }
 
 struct TorrentAddOptions: Sendable {
@@ -74,7 +80,7 @@ struct TorrentAddOptions: Sendable {
 
 actor QBittorrentAPI {
     private let baseURL: URL
-    private let authentication: APIAuthentication
+    private var authentication: APIAuthentication
     private let session: URLSession
 
     init(address: String, authentication: APIAuthentication) throws {
@@ -163,6 +169,28 @@ actor QBittorrentAPI {
 
     func preferencesData() async throws -> Data {
         try await request("app/preferences")
+    }
+
+    func networkInterfaces() async throws -> [NetworkInterfaceOption] {
+        let data = try await request("app/networkInterfaceList")
+        return try JSONDecoder().decode([NetworkInterfaceOption].self, from: data)
+    }
+
+    func networkInterfaceAddresses(for interface: String) async throws -> [String] {
+        let data = try await request("app/networkInterfaceAddressList", query: ["iface": interface])
+        return try JSONDecoder().decode([String].self, from: data)
+    }
+
+    func rotateAPIKey() async throws -> String {
+        let data = try await request("app/rotateAPIKey", method: "POST")
+        let response = try JSONDecoder().decode(APIKeyRotationResponse.self, from: data)
+        if case .apiKey = authentication { authentication = .apiKey(response.apiKey) }
+        return response.apiKey
+    }
+
+    func deleteAPIKey() async throws {
+        _ = try await request("app/deleteAPIKey", method: "POST")
+        if case .apiKey = authentication { authentication = .anonymous }
     }
 
     func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
@@ -1088,6 +1116,10 @@ private struct AddTorrentResponse: Decodable {
     let failure_count: Int
     let success_count: Int
     let pending_count: Int
+}
+
+private struct APIKeyRotationResponse: Decodable {
+    let apiKey: String
 }
 
 struct TorrentMetadata: Decodable, Sendable {

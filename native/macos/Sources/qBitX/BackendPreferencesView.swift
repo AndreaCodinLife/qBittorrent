@@ -1,20 +1,39 @@
+import AppKit
 import CoreFoundation
 import Foundation
 import SwiftUI
 
 private enum PreferenceKind { case boolean, number, text, json }
 
+private struct PreferenceChoice: Identifiable, Hashable {
+    let label: String
+    let value: String
+    var id: String { value }
+}
+
 private struct PreferenceItem: Identifiable {
     let id: String
     let section: String
     let label: String
     let kind: PreferenceKind
+    let sensitive: Bool
     let readOnly: Bool
+    var choices: [PreferenceChoice]
     var draft: String
     let original: String
+    var secretWasEdited = false
 
-    var isDirty: Bool { draft != original }
-    var explanation: String { Self.explanation(for: id) }
+    var isDirty: Bool { sensitive && !readOnly ? secretWasEdited : draft != original }
+    var explanation: String {
+        if sensitive && !readOnly && secretWasEdited && draft.isEmpty { return "Saving a blank value clears the stored password." }
+        return Self.explanation(for: id)
+    }
+    var secretPlaceholder: String { secretWasEdited && draft.isEmpty ? "Save blank to clear password" : "Leave blank to keep current value" }
+    var isMultiline: Bool { kind == .json || draft.contains("\n") || Self.multilineKeys.contains(id) }
+    var availableChoices: [PreferenceChoice] {
+        guard !choices.contains(where: { $0.value == draft }) else { return choices }
+        return [.init(label: "Current value (\(draft))", value: draft)] + choices
+    }
 
     func encodedValue() throws -> String {
         switch kind {
@@ -54,17 +73,157 @@ private struct PreferenceItem: Identifiable {
         }
         let sensitive = key.contains("password") || key.contains("api_key")
         let managed = bundled && ["web_ui_address", "web_ui_port", "bypass_local_auth", "web_ui_username", "use_https", "ssl_listen_port"].contains(key)
-        let shownValue = sensitive ? "••••••" : draft
+        let writeOnlySecret = key.contains("password")
+        let shownValue = writeOnlySecret ? "" : (key.contains("api_key") && !draft.isEmpty ? "••••••" : draft)
         return PreferenceItem(
             id: key,
             section: section(for: key),
             label: label(for: key),
             kind: kind,
-            readOnly: sensitive || managed,
+            sensitive: sensitive,
+            readOnly: key.contains("api_key") || managed,
+            choices: choices(for: key),
             draft: shownValue,
             original: shownValue
         )
     }
+
+    private static func choices(for key: String) -> [PreferenceChoice] {
+        switch key {
+        case "torrent_content_layout":
+            return [
+                .init(label: "Original", value: "Original"),
+                .init(label: "Create subfolder", value: "Subfolder"),
+                .init(label: "Don't create subfolder", value: "NoSubfolder")
+            ]
+        case "torrent_stop_condition":
+            return [
+                .init(label: "None", value: "None"),
+                .init(label: "Metadata received", value: "MetadataReceived"),
+                .init(label: "Files checked", value: "FilesChecked")
+            ]
+        case "mail_notification_encryption_type":
+            return [
+                .init(label: "None", value: "None"),
+                .init(label: "STARTTLS", value: "STARTTLS"),
+                .init(label: "SMTPS", value: "SMTPS")
+            ]
+        case "proxy_type":
+            return [
+                .init(label: "None", value: "None"),
+                .init(label: "SOCKS4", value: "SOCKS4"),
+                .init(label: "SOCKS5", value: "SOCKS5"),
+                .init(label: "HTTP", value: "HTTP")
+            ]
+        case "bittorrent_protocol":
+            return [
+                .init(label: "TCP and μTP", value: "0"),
+                .init(label: "TCP", value: "1"),
+                .init(label: "μTP", value: "2")
+            ]
+        case "encryption":
+            return [
+                .init(label: "Allow encryption", value: "0"),
+                .init(label: "Require encryption", value: "1"),
+                .init(label: "Disable encryption", value: "2")
+            ]
+        case "share_limits_mode":
+            return [
+                .init(label: "Use default", value: "Default"),
+                .init(label: "Match any limit", value: "MatchAny"),
+                .init(label: "Match all limits", value: "MatchAll")
+            ]
+        case "max_ratio_act":
+            return [
+                .init(label: "Stop torrent", value: "0"),
+                .init(label: "Remove torrent", value: "1"),
+                .init(label: "Enable super seeding", value: "2"),
+                .init(label: "Remove torrent and its files", value: "3")
+            ]
+        case "resume_data_storage_type":
+            return [
+                .init(label: "Fastresume files", value: "Legacy"),
+                .init(label: "SQLite database (experimental)", value: "SQLite")
+            ]
+        case "torrent_content_remove_option":
+            return [
+                .init(label: "Delete files permanently", value: "Delete"),
+                .init(label: "Move files to trash", value: "MoveToTrash")
+            ]
+        case "auto_delete_mode":
+            return [
+                .init(label: "Never", value: "0"),
+                .init(label: "After adding", value: "1"),
+                .init(label: "After adding or cancelling", value: "2")
+            ]
+        case "scheduler_days":
+            return [
+                .init(label: "Every day", value: "0"),
+                .init(label: "Weekdays", value: "1"),
+                .init(label: "Weekends", value: "2"),
+                .init(label: "Monday", value: "3"),
+                .init(label: "Tuesday", value: "4"),
+                .init(label: "Wednesday", value: "5"),
+                .init(label: "Thursday", value: "6"),
+                .init(label: "Friday", value: "7"),
+                .init(label: "Saturday", value: "8"),
+                .init(label: "Sunday", value: "9")
+            ]
+        case "disk_io_type":
+            return [
+                .init(label: "Default", value: "0"),
+                .init(label: "Memory mapped files", value: "1"),
+                .init(label: "POSIX-compliant", value: "2"),
+                .init(label: "Simple pread/pwrite", value: "3"),
+                .init(label: "Pread/pwrite", value: "4")
+            ]
+        case "disk_io_read_mode":
+            return [
+                .init(label: "Disable OS cache", value: "0"),
+                .init(label: "Enable OS cache", value: "1")
+            ]
+        case "disk_io_write_mode":
+            return [
+                .init(label: "Disable OS cache", value: "0"),
+                .init(label: "Enable OS cache", value: "1"),
+                .init(label: "Write-through", value: "2")
+            ]
+        case "utp_tcp_mixed_mode":
+            return [
+                .init(label: "Prefer TCP", value: "0"),
+                .init(label: "Peer proportional (throttles TCP)", value: "1")
+            ]
+        case "upload_slots_behavior":
+            return [
+                .init(label: "Fixed slots", value: "0"),
+                .init(label: "Upload rate based", value: "1")
+            ]
+        case "upload_choking_algorithm":
+            return [
+                .init(label: "Round-robin", value: "0"),
+                .init(label: "Fastest upload", value: "1"),
+                .init(label: "Anti-leech", value: "2")
+            ]
+        case "dyndns_service":
+            return [
+                .init(label: "DynDNS", value: "0"),
+                .init(label: "NO-IP", value: "1")
+            ]
+        case "file_log_age_type":
+            return [
+                .init(label: "Days", value: "0"),
+                .init(label: "Months", value: "1"),
+                .init(label: "Years", value: "2")
+            ]
+        default:
+            return []
+        }
+    }
+
+    private static let multilineKeys: Set<String> = [
+        "add_trackers", "add_trackers_url_list", "banned_IPs", "bypass_auth_subnet_whitelist",
+        "excluded_file_names", "rss_smart_episode_filters", "web_ui_custom_http_headers"
+    ]
 
     private static func label(for key: String) -> String {
         let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
@@ -75,11 +234,44 @@ private struct PreferenceItem: Identifiable {
     }
 
     private static func explanation(for key: String) -> String {
+        if key.contains("password") {
+            return "Stored server credential. Enter a new value to replace it; leave blank to keep the current value."
+        }
+        if key.contains("api_key") {
+            return "Generate, copy, rotate, or delete this key. Rotating it immediately invalidates the previous key."
+        }
         let descriptions: [String: String] = [
             "dht": "Find peers through the distributed hash table when a torrent has no reachable tracker.",
             "pex": "Exchange peer addresses with peers connected to the same torrent.",
             "lsd": "Discover BitTorrent peers on the local network.",
-            "encryption": "Choose whether BitTorrent protocol encryption is allowed, preferred, or required.",
+            "encryption": "Choose whether BitTorrent connections allow encryption, require it, or disable it.",
+            "bittorrent_protocol": "Choose whether peer connections use TCP, μTP, or both.",
+            "torrent_content_layout": "Choose how qBittorrent arranges files when adding a torrent.",
+            "torrent_stop_condition": "Stop a new torrent after metadata arrives or files finish checking.",
+            "auto_delete_mode": "Choose when qBittorrent deletes the source .torrent file after adding it.",
+            "proxy_type": "Proxy protocol used for configured proxy connections.",
+            "mail_notification_encryption_type": "Encryption used by the SMTP server for email notifications.",
+            "share_limits_mode": "Choose whether any enabled share limit or every enabled share limit must be reached.",
+            "max_ratio_act": "Action taken when a torrent reaches its share limit.",
+            "resume_data_storage_type": "Storage format for torrent resume data. Changing this setting requires a restart.",
+            "torrent_content_remove_option": "Choose whether removed torrent data is permanently deleted or moved to trash.",
+            "dyndns_service": "Dynamic DNS provider used for domain updates.",
+            "file_log_age_type": "Unit used for the file log retention age.",
+            "add_trackers": "One tracker URL per line to append to torrents when adding them.",
+            "add_trackers_url_list": "Tracker URLs returned from the configured tracker list source.",
+            "banned_IPs": "IP addresses or ranges blocked from connecting to this client.",
+            "bypass_auth_subnet_whitelist": "Subnets allowed to bypass Web UI authentication, one per line.",
+            "excluded_file_names": "File name patterns excluded from torrents, one per line.",
+            "rss_smart_episode_filters": "Episode patterns used by RSS automatic downloader rules.",
+            "web_ui_custom_http_headers": "Custom Web UI response headers in Header: value format, one per line.",
+            "web_ui_reverse_proxies_list": "Trusted reverse proxy IP addresses or subnets, separated by semicolons.",
+            "scheduler_days": "Days when qBittorrent switches to the alternative speed limits.",
+            "disk_io_type": "Disk access method used by libtorrent.",
+            "disk_io_read_mode": "Controls whether disk reads use the operating system cache.",
+            "disk_io_write_mode": "Controls whether disk writes use the operating system cache.",
+            "utp_tcp_mixed_mode": "Controls how TCP and μTP bandwidth is shared when both are active.",
+            "upload_slots_behavior": "Controls how upload slots are assigned while downloading.",
+            "upload_choking_algorithm": "Controls how qBittorrent selects peers to upload to while seeding.",
             "upnp": "Ask the router to forward the listening port automatically.",
             "listen_port": "Port used for incoming BitTorrent connections.",
             "random_port": "Choose a different listening port when the client starts.",
@@ -103,7 +295,7 @@ private struct PreferenceItem: Identifiable {
             "web_ui_username": "Username required to sign in to the Web UI.",
             "use_https": "Serve the Web UI over HTTPS using the configured certificate.",
             "rss_refresh_interval": "How often qBittorrent checks RSS feeds for new articles.",
-            "rss_auto_downloader_enabled": "Enable RSS rules that automatically add matching torrents.",
+            "rss_auto_downloading_enabled": "Enable RSS rules that automatically add matching torrents.",
             "search_enabled": "Enable the search tab and search plugins.",
             "confirm_torrent_deletion": "Ask before removing a torrent from the session.",
             "locale": "Language used by the qBittorrent backend and its Web UI."
@@ -115,11 +307,12 @@ private struct PreferenceItem: Identifiable {
         if key.hasPrefix("rss_") { return "RSS" }
         if key.hasPrefix("web_ui_") || key.hasPrefix("alternative_webui") || key.hasPrefix("bypass_auth") { return "WebUI" }
         if key.contains("search") || key.hasPrefix("python_") { return "Search" }
-        if key.contains("limit") || key.hasPrefix("schedule_") || key == "scheduler_enabled" { return "Speed" }
-        if key.contains("proxy") || key.contains("port") || key.contains("interface") || key.hasPrefix("dyndns_") || key == "upnp" { return "Connection" }
-        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") { return "Downloads" }
+        if ["max_ratio_enabled", "max_ratio", "max_ratio_act", "max_seeding_time_enabled", "max_seeding_time", "max_inactive_seeding_time_enabled", "max_inactive_seeding_time", "share_limits_mode"].contains(key) { return "BitTorrent" }
+        if key.contains("limit") || key.hasPrefix("schedule_") || key == "scheduler_enabled" || key == "scheduler_days" { return "Speed" }
+        if key.contains("proxy") || key.contains("port") || key.contains("interface") || key.hasPrefix("dyndns_") || key.hasPrefix("i2p_") || key.hasPrefix("ip_filter") || key == "upnp" || key == "banned_IPs" { return "Connection" }
+        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") || ["torrent_content_layout", "torrent_stop_condition", "add_to_top_of_queue", "add_stopped_enabled", "merge_trackers", "auto_delete_mode", "use_unwanted_folder"].contains(key) { return "Downloads" }
         if ["dht", "pex", "lsd", "encryption", "queueing_enabled", "anonymous_mode", "bittorrent_protocol"].contains(key) || key.hasPrefix("max_active") { return "BitTorrent" }
-        if key.hasPrefix("confirm_") || key.hasPrefix("status_bar_") || key.hasPrefix("file_log_") || key == "locale" { return "Behavior" }
+        if key.hasPrefix("confirm_") || key.hasPrefix("status_bar_") || key.hasPrefix("file_log_") || key.hasPrefix("mail_notification_") || key.hasPrefix("autorun") || key == "locale" || key == "start_paused" { return "Behavior" }
         return "Advanced"
     }
 }
@@ -127,6 +320,34 @@ private struct PreferenceItem: Identifiable {
 private enum PreferenceError: LocalizedError {
     case invalidValue
     var errorDescription: String? { "Enter a valid value before saving this preference." }
+}
+
+private enum APIKeyAction: Equatable {
+    case generate, rotate, delete
+
+    var confirmationTitle: String {
+        switch self {
+        case .generate: "Generate API key?"
+        case .rotate: "Rotate API key?"
+        case .delete: "Delete API key?"
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .generate: "Generate API Key"
+        case .rotate: "Rotate API Key"
+        case .delete: "Delete API Key"
+        }
+    }
+
+    var confirmationMessage: String {
+        switch self {
+        case .generate: "Generate a key that can be used to authenticate with qBittorrent's Web API?"
+        case .rotate: "The current key will stop working immediately and a new key will be generated."
+        case .delete: "The current key will stop working immediately."
+        }
+    }
 }
 
 struct BackendPreferencesView: View {
@@ -137,6 +358,8 @@ struct BackendPreferencesView: View {
     @State private var searchText = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var currentAPIKey = ""
+    @State private var apiKeyAction: APIKeyAction?
 
     private let sections = ["Behavior", "Downloads", "Connection", "Speed", "BitTorrent", "Search", "RSS", "WebUI", "Advanced"]
 
@@ -172,24 +395,79 @@ struct BackendPreferencesView: View {
                                 }
                                 .frame(width: 250, alignment: .leading)
                                 Spacer(minLength: 10)
-                                if item.kind == .boolean && !item.readOnly {
+                                if item.id == "web_ui_api_key" {
+                                    HStack(spacing: 8) {
+                                        Text(currentAPIKey.isEmpty ? "Not set" : "••••••")
+                                            .font(.system(.body, design: .monospaced))
+                                            .accessibilityLabel("API key")
+                                            .accessibilityValue(currentAPIKey.isEmpty ? "Not set" : "Set")
+                                        if !currentAPIKey.isEmpty {
+                                            Button("Copy") { copyAPIKey() }
+                                                .buttonStyle(.glass)
+                                                .disabled(isSaving || !store.isConnected)
+                                                .accessibilityLabel("Copy API key")
+                                        }
+                                        Button(currentAPIKey.isEmpty ? "Generate" : "Rotate") {
+                                            apiKeyAction = currentAPIKey.isEmpty ? .generate : .rotate
+                                        }
+                                        .buttonStyle(.glass)
+                                        .disabled(isSaving || !store.isConnected)
+                                        if !currentAPIKey.isEmpty {
+                                            Button("Delete", role: .destructive) { apiKeyAction = .delete }
+                                                .buttonStyle(.glass)
+                                                .disabled(isSaving || !store.isConnected)
+                                        }
+                                    }
+                                } else if item.sensitive && !item.readOnly {
+                                    SecureField(item.secretPlaceholder, text: Binding(
+                                        get: { item.draft },
+                                        set: {
+                                            item.draft = $0
+                                            item.secretWasEdited = true
+                                        }
+                                    ))
+                                        .textFieldStyle(.roundedBorder)
+                                        .accessibilityLabel(item.label)
+                                        .accessibilityHint(item.explanation)
+                                } else if !item.choices.isEmpty && !item.readOnly {
+                                    Picker("", selection: $item.draft) {
+                                        ForEach(item.availableChoices) { choice in
+                                            Text(choice.label).tag(choice.value)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
+                                    .accessibilityLabel(item.label)
+                                    .accessibilityHint(item.explanation)
+                                } else if item.kind == .boolean && !item.readOnly {
                                     Toggle("", isOn: Binding(
                                         get: { item.draft == "true" },
                                         set: { item.draft = $0 ? "true" : "false" }
                                     ))
                                     .labelsHidden()
-                                } else if item.kind == .json && !item.readOnly {
-                                    TextField("JSON value", text: $item.draft)
-                                        .textFieldStyle(.roundedBorder)
+                                    .accessibilityLabel(item.label)
+                                    .accessibilityHint(item.explanation)
+                                } else if item.isMultiline && !item.readOnly {
+                                    TextEditor(text: $item.draft)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .frame(minHeight: 72, maxHeight: 96)
+                                        .scrollContentBackground(.hidden)
+                                        .padding(4)
+                                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+                                        .accessibilityLabel(item.label)
+                                        .accessibilityHint(item.explanation)
                                 } else {
                                     TextField("Value", text: $item.draft)
                                         .textFieldStyle(.roundedBorder)
                                         .disabled(item.readOnly)
+                                        .accessibilityLabel(item.label)
+                                        .accessibilityHint(item.explanation)
                                 }
                                 if item.isDirty && !item.readOnly {
                                     Button("Save") { save(item) }
                                         .buttonStyle(.glass)
                                         .disabled(isSaving)
+                                        .accessibilityLabel("Save \(item.label)")
                                 }
                             }
                             .padding(.vertical, 4)
@@ -200,16 +478,90 @@ struct BackendPreferencesView: View {
         }
         .frame(minWidth: 760, minHeight: 560)
         .task { await reload() }
+        .onDisappear { currentAPIKey = "" }
+        .confirmationDialog(
+            apiKeyAction?.confirmationTitle ?? "API key",
+            isPresented: Binding(
+                get: { apiKeyAction != nil },
+                set: { if !$0 { apiKeyAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let action = apiKeyAction {
+                Button(action.buttonTitle, role: action == .delete ? .destructive : nil) {
+                    apiKeyAction = nil
+                    performAPIKeyAction(action)
+                }
+            }
+            Button("Cancel", role: .cancel) { apiKeyAction = nil }
+        } message: {
+            Text(apiKeyAction?.confirmationMessage ?? "")
+        }
     }
 
     private func reload() async {
         do {
             let data = try await store.preferencesData()
             guard let values = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PreferenceError.invalidValue }
-            items = values.map { PreferenceItem.make(key: $0.key, value: $0.value, bundled: store.usesBundledBackend) }
+            currentAPIKey = values["web_ui_api_key"] as? String ?? ""
+            var loadedItems = values.map { PreferenceItem.make(key: $0.key, value: $0.value, bundled: store.usesBundledBackend) }
                 .sorted { $0.id < $1.id }
+
+            if let interfaces = try? await store.networkInterfaces(),
+               let index = loadedItems.firstIndex(where: { $0.id == "current_network_interface" }) {
+                var choices = [PreferenceChoice(label: "Any interface", value: "")]
+                    + interfaces.map { PreferenceChoice(label: $0.name, value: $0.value) }
+                let currentInterface = loadedItems[index].draft
+                if !currentInterface.isEmpty && !choices.contains(where: { $0.value == currentInterface }) {
+                    let name = values["current_interface_name"] as? String ?? currentInterface
+                    choices.append(.init(label: "Current interface (\(name))", value: currentInterface))
+                }
+                loadedItems[index].choices = choices
+            }
+
+            let currentInterface = values["current_network_interface"] as? String ?? ""
+            if let addresses = try? await store.networkInterfaceAddresses(for: currentInterface),
+               let index = loadedItems.firstIndex(where: { $0.id == "current_interface_address" }) {
+                let choices = [
+                    PreferenceChoice(label: "All addresses", value: ""),
+                    PreferenceChoice(label: "All IPv4 addresses", value: "0.0.0.0"),
+                    PreferenceChoice(label: "All IPv6 addresses", value: "::")
+                ] + addresses.map { PreferenceChoice(label: $0, value: $0) }
+                loadedItems[index].choices = choices
+            }
+
+            items = loadedItems
             errorMessage = nil
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func copyAPIKey() {
+        guard !currentAPIKey.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(currentAPIKey, forType: .string)
+    }
+
+    private func performAPIKeyAction(_ action: APIKeyAction) {
+        isSaving = true
+        Task {
+            do {
+                switch action {
+                case .generate, .rotate:
+                    let result = try await store.rotateWebUIAPIKey()
+                    currentAPIKey = result.key
+                    await reload()
+                    if let warning = result.warning { errorMessage = warning }
+                case .delete:
+                    currentAPIKey = ""
+                    if try await store.deleteWebUIAPIKey() {
+                        await reload()
+                    } else {
+                        errorMessage = store.connectionError
+                    }
+                }
+            } catch { errorMessage = error.localizedDescription }
+            isSaving = false
+        }
     }
 
     private func save(_ item: PreferenceItem) {

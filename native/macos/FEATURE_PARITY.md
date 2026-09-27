@@ -19,7 +19,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 | Speed details | Present | The session graph includes total, payload, overhead, DHT, and tracker rates in both directions, with per-series toggles and 1-minute through 24-hour ranges. History is sampled while qBitX is running and is not persisted across launches. |
 | Search | Present | Search categories and plugins, query history, concurrent result tabs with per-tab stop, name-only/everywhere query filtering, wildcard/regex text filtering, seed-count and size filters, sortable and customizable result columns, batch download and add-options windows, description-page opening, copy links, and plugin install/update/enable/remove are available. Plugin results use the selected engine for metadata preview and add options. Search still requires compatible qBittorrent search plugins. |
 | RSS and automatic downloader | Present | Feed/folder management, article actions, rules, enable/disable, rename/clone/remove, matching articles, import/export, category/tags/path, stopped state, layout, and priority options are available. |
-| Preferences | Partial | All Web API-exposed backend preferences are searchable across sections and editable with type-aware controls and qBittorrent-side validation. Common settings include explanations; specialized Qt controls and help for less common keys still need a preference-by-preference audit. |
+| Preferences | Partial | All Web API-exposed backend preferences are searchable across sections and editable with type-aware controls. Booleans use toggles, numeric and text values retain editable fields, and qBittorrent's fixed-choice settings use labeled menus for protocol/encryption, proxy and SMTP types, torrent add behavior, share-limit actions, scheduler days, disk I/O, and peer upload algorithms. Network interface and address menus load their values from the backend when those endpoints are available. Multiline lists and JSON values use scrolling editors. Passwords can be replaced or cleared without displaying the stored value; the API key is masked and can be generated, copied, rotated, or deleted with confirmation. qBittorrent validates saved values. Free-form paths and locale still use text entry instead of the original contextual pickers. |
 | Torrent creator | Present | v1/v2/hybrid format, piece size, private mode, source/comment, trackers and web seeds, hidden-file handling, task history, export, and task removal are available. |
 | Cookies and plugin management | Present | Cookie editing and search-plugin management are available. |
 | Statistics and execution log | Present | qBittorrent session statistics fields and log severity/search filters are available. |
@@ -30,6 +30,8 @@ This checklist compares the native macOS preview with the desktop workflows in t
 - Swift package debug and release builds targeting macOS 26, plus the C++ backend build.
 - Packaged UI smoke test against a fresh `/tmp` backend profile and separate port; the app reached the connected state and displayed Web API 2.16.2.
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
+- Isolated qBittorrent v5.3.0beta1 backend check for preference updates, password replacement and clearing, proxy enum values, network interface/address lists, API-key rotation/revocation, and deletion. The throwaway backend profile was terminated after the check.
+- Compared the native preference controls with qBittorrent's Web UI preference fields and API getters/setters. Fixed-choice backend preferences now use their qBittorrent labels and serialized values; network interface pickers use the matching API endpoints.
 - `git diff --check`.
 
 ## Backend API version support
@@ -41,7 +43,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 ## Remaining parity gate
 
 1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled. The smoke test only confirmed launch and connection.
-2. Finish a preference-by-preference comparison with the Qt options dialog; the native editor covers the API-exposed values but some specialized controls and explanations remain less detailed.
+2. Run the preference controls against bundled and remote backends, including password replacement/clearing and network interface selection. Free-form paths and locale remain text inputs and rely on Web API validation.
 3. Exercise graceful degradation against older remote qBittorrent versions, including missing tracker summaries and unsupported API actions.
 
-The source and isolated API checks cover the main transfer, search, RSS, organization, and diagnostic workflows. This audit remains open until the packaged macOS UI, accessibility, backend compatibility, and specialized preference screens are checked.
+The source and isolated API checks cover the main transfer, search, RSS, organization, diagnostic, and backend preference workflows. This audit remains open until the packaged macOS UI, accessibility, runtime preference editing, and older-backend compatibility are checked.

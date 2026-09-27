@@ -95,6 +95,40 @@ final class TorrentStore {
         return try await api.preferencesData()
     }
 
+    func networkInterfaces() async throws -> [NetworkInterfaceOption] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.networkInterfaces()
+    }
+
+    func networkInterfaceAddresses(for interface: String) async throws -> [String] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.networkInterfaceAddresses(for: interface)
+    }
+
+    func rotateWebUIAPIKey() async throws -> (key: String, warning: String?) {
+        guard let api else { throw TorrentStoreError.disconnected }
+        let key = try await api.rotateAPIKey()
+        var warning: String?
+        if let saved = SavedRemoteConnection.load(), saved.authenticationMode == .apiKey {
+            do { try saved.save(secret: key) }
+            catch { warning = "The API key was rotated, but qBitX could not update its saved credential. Copy the new key now. \(error.localizedDescription)" }
+        }
+        return (key, warning)
+    }
+
+    func deleteWebUIAPIKey() async throws -> Bool {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.deleteAPIKey()
+        if let saved = SavedRemoteConnection.load(), saved.authenticationMode == .apiKey {
+            SavedRemoteConnection.clear()
+            self.api = nil
+            isConnected = false
+            connectionError = "The API key was deleted. qBitX disconnected from this Web UI; configure another credential to reconnect."
+            return false
+        }
+        return true
+    }
+
     func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, pieceSize: pieceSize, format: format)
