@@ -29,8 +29,8 @@ struct ConnectionSettingsView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                if store.isConnected && store.requiresNewerWebAPIForFullParity {
-                    Label("The current server exposes Web API \(store.serverAPIVersion). Full qBitX feature parity requires 2.16.2 or later; some newer RSS and category settings may be unavailable.", systemImage: "exclamationmark.triangle.fill")
+                if let compatibilityMessage = store.webAPICompatibilityMessage {
+                    Label(compatibilityMessage, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }

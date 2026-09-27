@@ -32,6 +32,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
 - Isolated qBittorrent v5.3.0beta1 backend check for preference updates, password replacement and clearing, proxy enum values, network interface/address lists, API-key rotation/revocation, and deletion. The throwaway backend profile was terminated after the check.
 - Compared the native preference controls with qBittorrent's Web UI preference fields and API getters/setters. Fixed-choice backend preferences now use their qBittorrent labels and serialized values; network interface pickers use the matching API endpoints.
+- Older API behavior is guarded in the client: missing tracker summaries decode as empty, unsupported actions show the server's HTTP error, and an unavailable Web API version now produces an explicit compatibility warning.
 - `git diff --check`.
 
 ## Backend API version support

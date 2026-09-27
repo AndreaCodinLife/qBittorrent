@@ -745,10 +745,12 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                     .help(store.isConnected ? "\(store.connectionName) · qBittorrent \(store.serverVersion) · Web API \(store.serverAPIVersion)" : "Disconnected")
-                if store.isConnected && store.requiresNewerWebAPIForFullParity {
+                if let compatibilityMessage = store.webAPICompatibilityMessage {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                        .help("Full qBitX feature parity requires Web API 2.16.2 or later.")
+                        .help(compatibilityMessage)
+                        .accessibilityLabel("Web API compatibility warning")
+                        .accessibilityHint(compatibilityMessage)
                 }
                 Spacer()
             }

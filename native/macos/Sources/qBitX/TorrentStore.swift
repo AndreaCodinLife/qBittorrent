@@ -45,7 +45,7 @@ final class TorrentStore {
                 connectionName = "Local library"
             }
             serverVersion = try await connectedAPI.verify()
-            serverAPIVersion = (try? await connectedAPI.webAPIVersion()) ?? ""
+            serverAPIVersion = (try? await connectedAPI.webAPIVersion()).flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
             api = connectedAPI
             isConnected = true
             while !Task.isCancelled {
@@ -76,14 +76,20 @@ final class TorrentStore {
 
     var usesBundledBackend: Bool { SavedRemoteConnection.load() == nil }
 
-    var requiresNewerWebAPIForFullParity: Bool {
-        guard let current = Self.versionComponents(serverAPIVersion) else { return false }
+    var webAPICompatibilityMessage: String? {
+        guard isConnected else { return nil }
+        guard let current = Self.versionComponents(serverAPIVersion) else {
+            return "qBitX could not read this server's Web API version, so full compatibility cannot be confirmed. Some newer features may be unavailable."
+        }
         let minimum = [2, 16, 2]
         let count = max(current.count, minimum.count)
         let paddedCurrent = current + Array(repeating: 0, count: count - current.count)
         let paddedMinimum = minimum + Array(repeating: 0, count: count - minimum.count)
-        return paddedCurrent.lexicographicallyPrecedes(paddedMinimum)
+        guard paddedCurrent.lexicographicallyPrecedes(paddedMinimum) else { return nil }
+        return "This server exposes Web API \(serverAPIVersion); full qBitX feature parity requires 2.16.2 or later. Some newer RSS and category settings may be unavailable."
     }
+
+    var requiresNewerWebAPIForFullParity: Bool { webAPICompatibilityMessage != nil }
 
     private static func versionComponents(_ value: String) -> [Int]? {
         let components = value.split(separator: ".").compactMap { Int($0) }
