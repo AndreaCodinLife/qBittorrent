@@ -40,10 +40,10 @@ struct Torrent: Identifiable, Sendable {
     let category: String
     let tags: String
     let tracker: String
-    let trackerHosts: [String]
-    let hasTrackerWarning: Bool
-    let hasTrackerError: Bool
-    let hasOtherAnnounceError: Bool
+    var trackerHosts: [String]
+    var hasTrackerWarning: Bool
+    var hasTrackerError: Bool
+    var hasOtherAnnounceError: Bool
     let sizeBytes: Int64
     let progress: Double
     let downloadRateBytes: Int64

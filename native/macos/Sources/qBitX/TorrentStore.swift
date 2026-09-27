@@ -20,11 +20,13 @@ final class TorrentStore {
 
     private let backend = BundledBackend()
     private var api: QBittorrentAPI?
+    private var trackerSummaryRefreshedAt: Date?
 
     func run() async {
         connectionError = nil
         isConnected = false
         sessionSpeedHistory = []
+        trackerSummaryRefreshedAt = nil
         api = nil
         do {
             let connectedAPI: QBittorrentAPI
@@ -128,12 +130,28 @@ final class TorrentStore {
     func refresh() async {
         guard let api else { return }
         do {
-            async let newTorrents = api.torrents()
+            let now = Date()
+            let shouldRefreshTrackerSummary = trackerSummaryRefreshedAt.map { now.timeIntervalSince($0) >= 15 } ?? true
+            async let newTorrents = api.torrents(includeTrackers: shouldRefreshTrackerSummary)
             async let newStatus = api.transferStatus()
-            torrents = try await newTorrents
+            var refreshedTorrents = try await newTorrents
+            if shouldRefreshTrackerSummary {
+                trackerSummaryRefreshedAt = now
+            } else {
+                let priorTorrents = Dictionary(uniqueKeysWithValues: torrents.map { ($0.id, $0) })
+                refreshedTorrents = refreshedTorrents.map { torrent in
+                    guard let prior = priorTorrents[torrent.id] else { return torrent }
+                    var updated = torrent
+                    updated.trackerHosts = prior.trackerHosts
+                    updated.hasTrackerWarning = prior.hasTrackerWarning
+                    updated.hasTrackerError = prior.hasTrackerError
+                    updated.hasOtherAnnounceError = prior.hasOtherAnnounceError
+                    return updated
+                }
+            }
+            torrents = refreshedTorrents
             transferStatus = try await newStatus
             isConnected = true
-            let now = Date()
             if sessionSpeedHistory.last.map({ now.timeIntervalSince($0.date) >= 2 }) ?? true {
                 sessionSpeedHistory.append(TransferSample(date: now, status: transferStatus))
             }

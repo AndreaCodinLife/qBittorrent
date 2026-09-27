@@ -101,8 +101,8 @@ actor QBittorrentAPI {
         return version.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func torrents() async throws -> [Torrent] {
-        let data = try await request("torrents/info", query: ["includeTrackers": "true"])
+    func torrents(includeTrackers: Bool = false) async throws -> [Torrent] {
+        let data = try await request("torrents/info", query: includeTrackers ? ["includeTrackers": "true"] : [:])
         let responses = try JSONDecoder().decode([TorrentResponse].self, from: data)
         let raw = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
         return responses.enumerated().map { index, response in
@@ -748,7 +748,8 @@ private struct TorrentResponse: Decodable {
             category: category ?? "",
             tags: tags ?? "",
             tracker: tracker ?? "",
-            trackerHosts: Array(Set((trackers ?? []).compactMap { URLComponents(string: $0.url)?.host?.lowercased() })).sorted(),
+            trackerHosts: Array(Set((trackers ?? []).compactMap { URLComponents(string: $0.url)?.host?.lowercased() }
+                + [tracker].compactMap { URLComponents(string: $0 ?? "")?.host?.lowercased() })).sorted(),
             hasTrackerWarning: (trackers ?? []).contains { tracker in
                 tracker.status == 2 && (tracker.endpoints ?? []).contains { $0.status == 2 && !($0.msg?.isEmpty ?? true) }
             },
