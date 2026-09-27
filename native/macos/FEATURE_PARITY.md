@@ -28,7 +28,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 ## Verification completed
 
 - Swift package debug and release builds targeting macOS 26, plus the C++ backend build.
-- Packaged UI smoke test against a fresh `/tmp` backend profile and separate port; the app reached the connected state and displayed Web API 2.16.2.
+- Packaged UI smoke test against a fresh `/tmp` backend profile and separate port; the current release executable launched, connected to qBittorrent v5.3.0beta1, and enabled peer-country resolution in that test profile. The profile and backend were isolated from the normal library.
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
 - Isolated qBittorrent v5.3.0beta1 backend check for preference updates, password replacement and clearing, proxy enum values, network interface/address lists, API-key rotation/revocation, and deletion. The throwaway backend profile was terminated after the check.
 - Compared the native preference controls with qBittorrent's Web UI preference fields and API getters/setters. Fixed-choice backend preferences now use their qBittorrent labels and serialized values; network interface pickers use the matching API endpoints.
@@ -43,7 +43,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 
 ## Remaining parity gate
 
-1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled. The smoke test only confirmed launch and connection.
+1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled. The smoke test confirmed launch, connection, and the startup country-resolution preference against an isolated backend.
 2. Run the preference controls against bundled and remote backends, including password replacement/clearing and network interface selection. Free-form paths and locale remain text inputs and rely on Web API validation.
 3. Exercise graceful degradation against older remote qBittorrent versions, including missing tracker summaries and unsupported API actions.
 
