@@ -741,8 +741,15 @@ struct ContentView: View {
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 7) {
                 Circle().fill(store.isConnected ? .green : .orange).frame(width: 7, height: 7)
-                Text(store.isConnected ? "\(store.connectionName) · \(store.serverVersion)" : "Disconnected")
+                Text(store.isConnected ? "\(store.connectionName) · qB \(store.serverVersion) · API \(store.serverAPIVersion)" : "Disconnected")
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(store.isConnected ? "\(store.connectionName) · qBittorrent \(store.serverVersion) · Web API \(store.serverAPIVersion)" : "Disconnected")
+                if store.isConnected && store.requiresNewerWebAPIForFullParity {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .help("Full qBitX feature parity requires Web API 2.16.2 or later.")
+                }
                 Spacer()
             }
             .padding(14)

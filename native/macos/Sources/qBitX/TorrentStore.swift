@@ -13,6 +13,7 @@ final class TorrentStore {
     private(set) var torrents: [Torrent] = []
     private(set) var transferStatus = TransferStatus()
     private(set) var serverVersion = ""
+    private(set) var serverAPIVersion = ""
     private(set) var connectionError: String?
     private(set) var isConnected = false
     private(set) var connectionName = "Local library"
@@ -25,6 +26,8 @@ final class TorrentStore {
     func run() async {
         connectionError = nil
         isConnected = false
+        serverVersion = ""
+        serverAPIVersion = ""
         sessionSpeedHistory = []
         trackerSummaryRefreshedAt = nil
         api = nil
@@ -42,6 +45,7 @@ final class TorrentStore {
                 connectionName = "Local library"
             }
             serverVersion = try await connectedAPI.verify()
+            serverAPIVersion = (try? await connectedAPI.webAPIVersion()) ?? ""
             api = connectedAPI
             isConnected = true
             while !Task.isCancelled {
@@ -71,6 +75,20 @@ final class TorrentStore {
     }
 
     var usesBundledBackend: Bool { SavedRemoteConnection.load() == nil }
+
+    var requiresNewerWebAPIForFullParity: Bool {
+        guard let current = Self.versionComponents(serverAPIVersion) else { return false }
+        let minimum = [2, 16, 2]
+        let count = max(current.count, minimum.count)
+        let paddedCurrent = current + Array(repeating: 0, count: count - current.count)
+        let paddedMinimum = minimum + Array(repeating: 0, count: count - minimum.count)
+        return paddedCurrent.lexicographicallyPrecedes(paddedMinimum)
+    }
+
+    private static func versionComponents(_ value: String) -> [Int]? {
+        let components = value.split(separator: ".").compactMap { Int($0) }
+        return components.count == value.split(separator: ".").count ? components : nil
+    }
 
     func preferencesData() async throws -> Data {
         guard let api else { throw TorrentStoreError.disconnected }

@@ -101,6 +101,12 @@ actor QBittorrentAPI {
         return version.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func webAPIVersion() async throws -> String {
+        let data = try await request("app/webapiVersion")
+        guard let version = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
+        return version.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func torrents(includeTrackers: Bool = false) async throws -> [Torrent] {
         let data = try await request("torrents/info", query: includeTrackers ? ["includeTrackers": "true"] : [:])
         let responses = try JSONDecoder().decode([TorrentResponse].self, from: data)

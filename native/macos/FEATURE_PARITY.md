@@ -31,10 +31,16 @@ This checklist compares the native macOS preview with the desktop workflows in t
 - Isolated Web API checks for RSS rules and folders, categories/tags, per-torrent limits, torrent creation options, metadata preview/file priorities, tracker tiers, session statistics, bulk tag assignment/removal, and multi-file priority changes. These checks used temporary qBittorrent profiles rather than the user's normal profile.
 - `git diff --check`.
 
+## Backend API version support
+
+- Full parity requires Web API 2.16.2 or newer, matching this source tree's `API_VERSION`. The 2.16.2 changelog adds RSS rule import/export and category share-limit fields used by qBitX.
+- Torrent metadata preview requires Web API 2.11.9; using a search plugin to preview and add a result requires 2.13.1.
+- qBitX reads the connected Web API version and warns when it is below the full-parity floor. Older servers may connect, but individual newer workflows can be unavailable.
+
 ## Remaining parity gate
 
 1. Exercise the packaged native app on macOS with large lists, multi-selection, active transfers, Search, RSS, and accessibility enabled.
 2. Finish a preference-by-preference comparison with the Qt options dialog; the generic native preference editor still lacks some specialized explanations and validation.
-3. Record minimum backend-version requirements for preview and tracker-summary endpoints, then verify older supported remote qBittorrent versions.
+3. Exercise graceful degradation against older remote qBittorrent versions, including missing tracker summaries and unsupported API actions.
 
 The source and isolated API checks cover the main transfer, search, RSS, organization, and diagnostic workflows. This audit remains open until the packaged macOS UI, accessibility, backend compatibility, and specialized preference screens are checked.
