@@ -40,6 +40,10 @@ struct Torrent: Identifiable, Sendable {
     let category: String
     let tags: String
     let tracker: String
+    let trackerHosts: [String]
+    let hasTrackerWarning: Bool
+    let hasTrackerError: Bool
+    let hasOtherAnnounceError: Bool
     let sizeBytes: Int64
     let progress: Double
     let downloadRateBytes: Int64
@@ -135,9 +139,45 @@ enum TorrentFilter: String, CaseIterable, Identifiable {
     }
 }
 
+enum TrackerStatusFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case warning = "Warning"
+    case trackerError = "Tracker error"
+    case otherError = "Other error"
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .all: "network"
+        case .warning: "exclamationmark.triangle"
+        case .trackerError, .otherError: "xmark.octagon"
+        }
+    }
+
+    func includes(_ torrent: Torrent) -> Bool {
+        switch self {
+        case .all: true
+        case .warning: torrent.hasTrackerWarning
+        case .trackerError: torrent.hasTrackerError
+        case .otherError: torrent.hasOtherAnnounceError
+        }
+    }
+}
+
 struct TransferStatus: Sendable {
     var downloadRate: Int64 = 0
     var uploadRate: Int64 = 0
+    var totalDownloadRate: Int64 = 0
+    var totalUploadRate: Int64 = 0
+    var payloadDownloadRate: Int64 = 0
+    var payloadUploadRate: Int64 = 0
+    var overheadDownloadRate: Int64 = 0
+    var overheadUploadRate: Int64 = 0
+    var dhtDownloadRate: Int64 = 0
+    var dhtUploadRate: Int64 = 0
+    var trackerDownloadRate: Int64 = 0
+    var trackerUploadRate: Int64 = 0
     var dhtNodes: Int = 0
     var connectionStatus = "disconnected"
 

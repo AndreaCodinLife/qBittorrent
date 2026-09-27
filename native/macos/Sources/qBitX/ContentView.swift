@@ -74,8 +74,12 @@ struct ContentView: View {
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
     @AppStorage("qBitX.showStatusBar") private var showStatusBar = true
     @AppStorage("qBitX.showDetailPane") private var showDetailPane = true
-    @AppStorage("qBitX.showToolbarLabels") private var showToolbarLabels = true
+    @AppStorage("qBitX.showToolbar") private var showToolbar = true
+    @AppStorage("qBitX.toolbarStyle") private var toolbarStyle = "system"
     @AppStorage("qBitX.showSpeedInTitleBar") private var showSpeedInTitleBar = false
+    @AppStorage("qBitX.showTrackerStatusFilter") private var showTrackerStatusFilter = true
+    @AppStorage("qBitX.separateTrackerStatusFilter") private var separateTrackerStatusFilter = false
+    @AppStorage("qBitX.hideZeroStatusFilters") private var hideZeroStatusFilters = false
     @AppStorage("qBitX.interfaceLocked") private var interfaceLocked = false
     @AppStorage("qBitX.downloadCompletionAction") private var downloadCompletionAction = "none"
     @State private var selectedTorrentIDs: Set<String> = []
@@ -83,15 +87,25 @@ struct ContentView: View {
     @State private var textAction: TorrentTextAction?
     @State private var detailInput: DetailInput?
     @State private var statusFilter: TorrentFilter = .all
+    @State private var trackerStatusFilter: TrackerStatusFilter?
     @State private var categoryFilter: String?
     @State private var tagFilter: String?
     @State private var trackerFilter: String?
     @State private var searchText = ""
+    @FocusState private var torrentFilterFocused: Bool
     @State private var sortField: TorrentSort = .name
     @State private var sortDescending = false
     @AppStorage("qBitX.speedGraphPeriod") private var speedGraphPeriod = 300
-    @AppStorage("qBitX.speedGraphDownload") private var showDownloadGraph = true
-    @AppStorage("qBitX.speedGraphUpload") private var showUploadGraph = true
+    @AppStorage("qBitX.speedGraph.totalUpload") private var showTotalUploadGraph = true
+    @AppStorage("qBitX.speedGraph.totalDownload") private var showTotalDownloadGraph = true
+    @AppStorage("qBitX.speedGraph.payloadUpload") private var showPayloadUploadGraph = true
+    @AppStorage("qBitX.speedGraph.payloadDownload") private var showPayloadDownloadGraph = true
+    @AppStorage("qBitX.speedGraph.overheadUpload") private var showOverheadUploadGraph = true
+    @AppStorage("qBitX.speedGraph.overheadDownload") private var showOverheadDownloadGraph = true
+    @AppStorage("qBitX.speedGraph.dhtUpload") private var showDHTUploadGraph = true
+    @AppStorage("qBitX.speedGraph.dhtDownload") private var showDHTDownloadGraph = true
+    @AppStorage("qBitX.speedGraph.trackerUpload") private var showTrackerUploadGraph = true
+    @AppStorage("qBitX.speedGraph.trackerDownload") private var showTrackerDownloadGraph = true
     @State private var mainTab: MainTab = .transfers
     @State private var detailTab: DetailTab = .general
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
@@ -99,6 +113,8 @@ struct ContentView: View {
     @State private var showsFileImporter = false
     @State private var pendingTorrentFile: PendingTorrentFile?
     @State private var showsRemoveConfirmation = false
+    @State private var showsClearTagsConfirmation = false
+    @State private var clearTagsHashes: [String] = []
     @State private var showsConnectionSettings = false
     @State private var showsBackendPreferences = false
     @State private var showsSpeedLimits = false
@@ -108,6 +124,7 @@ struct ContentView: View {
     @State private var showsCookies = false
     @State private var torrentOptionsTarget: TorrentOptionsTarget?
     @State private var showsOrganization = false
+    @State private var organizationInitialCategory: String?
     @State private var showsAbout = false
     @State private var previewTorrent: Torrent?
     @State private var authenticationError: String?
@@ -116,19 +133,25 @@ struct ContentView: View {
     @State private var actionError: String?
     @State private var retryID = 0
     @State private var properties: TorrentProperties?
+    @State private var pieceStates: [Int] = []
+    @State private var pieceAvailability: [Int] = []
     @State private var trackers: [TorrentTracker] = []
+    @State private var categoryCatalog: Set<String> = []
+    @State private var tagCatalog: Set<String> = []
     @State private var files: [TorrentFile] = []
     @State private var peers: [TorrentPeer] = []
     @State private var webSeeds: [TorrentWebSeed] = []
+    @State private var selectedFileIDs: Set<Int> = []
 
     private var torrents: [Torrent] { store.torrents }
 
     private var visibleTorrents: [Torrent] {
         torrents.filter { torrent in
             statusFilter.includes(torrent)
-                && (categoryFilter == nil || torrent.category == categoryFilter)
+                && (trackerStatusFilter.map { $0.includes(torrent) } ?? true)
+                && (categoryFilter.map { category in torrent.category == category || torrent.category.hasPrefix(category + "/") } ?? true)
                 && (tagFilter.map { tag in torrent.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(tag) } ?? true)
-                && (trackerFilter == nil || torrent.tracker == trackerFilter)
+                && (trackerFilter.map { host in host.isEmpty ? torrent.trackerHosts.isEmpty : torrent.trackerHosts.contains(host) } ?? true)
                 && (searchText.isEmpty || torrent.name.localizedCaseInsensitiveContains(searchText))
         }.sorted { left, right in
             let leftNumber = sortNumber(for: sortField.key, torrent: left)
@@ -183,6 +206,32 @@ struct ContentView: View {
 
     private var selectedHashes: [String] { selectedTorrentIDs.sorted() }
 
+    private var allFilterCategories: [String] {
+        categoryCatalog.union(torrents.map(\.category)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private var allFilterTags: [String] {
+        let assigned = torrents.flatMap { $0.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+        return tagCatalog.union(assigned.filter { !$0.isEmpty }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func torrentHasTag(_ torrent: Torrent, _ tag: String) -> Bool {
+        torrent.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(tag)
+    }
+
+    private var allFilterTrackerHosts: [String] {
+        Array(Set(torrents.flatMap(\.trackerHosts))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func isSelected(_ item: TorrentFilter) -> Bool {
+        statusFilter == item && trackerStatusFilter == nil && categoryFilter == nil && tagFilter == nil && trackerFilter == nil
+    }
+
+    private func isSelected(_ item: TrackerStatusFilter) -> Bool {
+        statusFilter == .all && categoryFilter == nil && tagFilter == nil && trackerFilter == nil
+            && (item == .all ? trackerStatusFilter == nil : trackerStatusFilter == item)
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
             filterSidebar
@@ -215,12 +264,16 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .task(id: retryID) { await store.run() }
+        .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }
         .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") { await loadDetails() }
         .onChange(of: torrents.map(\.id)) { _, ids in
             selectedTorrentIDs.formIntersection(ids)
             if selectedTorrentIDs.isEmpty, let first = ids.first { selectedTorrentIDs = [first] }
         }
         .onChange(of: torrents.map(\.progress)) { _, _ in checkDownloadCompletion() }
+        .onChange(of: showsOrganization) { wasPresented, isPresented in
+            if wasPresented && !isPresented { Task { await loadFilterCatalogs() } }
+        }
         .onAppear { sidebarVisibility = showFiltersSidebar ? .all : .detailOnly; syncWindowTitle() }
         .onChange(of: showFiltersSidebar) { _, visible in sidebarVisibility = visible ? .all : .detailOnly }
         .onChange(of: "\(store.transferStatus.downloadText)|\(store.transferStatus.uploadText)|\(showSpeedInTitleBar)") { _, _ in syncWindowTitle() }
@@ -228,6 +281,31 @@ struct ContentView: View {
             if interfaceLocked { lockedOverlay }
         }
         .toolbar { toolbarContent }
+        .toolbarVisibility(showToolbar ? .visible : .hidden, for: .windowToolbar)
+        .focusedSceneValue(\.qBitXCommandActions, QBitXCommandActions(
+            addTorrentFile: { showsFileImporter = true },
+            addTorrentURL: { showsURLSheet = true },
+            createTorrent: { showsTorrentCreator = true },
+            removeSelected: { if !selectedTorrentIDs.isEmpty { showsRemoveConfirmation = true } },
+            startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
+            stopSelected: { runBulkAction { try await store.command(.stop, hashes: $0) } },
+            forceStartSelected: { runBulkAction { try await store.setForceStart(true, hashes: $0) } },
+            recheckSelected: { runBulkAction { try await store.command(.recheck, hashes: $0) } },
+            moveSelectedToTop: { runBulkAction { try await store.command(.topPrio, hashes: $0) } },
+            moveSelectedUp: { runBulkAction { try await store.command(.increasePrio, hashes: $0) } },
+            moveSelectedDown: { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } },
+            moveSelectedToBottom: { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } },
+            pauseSession: { setSessionPaused(true) },
+            resumeSession: { setSessionPaused(false) },
+            showPreferences: { showsBackendPreferences = true },
+            showStatistics: { showsStatistics = true },
+            showSpeedLimits: { showsSpeedLimits = true },
+            focusTorrentFilter: { mainTab = .transfers; torrentFilterFocused = true },
+            selectTransfers: { mainTab = .transfers },
+            selectSearch: { mainTab = .search },
+            selectRSS: { mainTab = .rss },
+            showExecutionLog: { showsExecutionLog = true }
+        ))
         .sheet(isPresented: $showsURLSheet) {
             AddTorrentSheet(file: nil, store: store) { url, options in
                 try await store.add(url: url, options: options)
@@ -257,7 +335,7 @@ struct ContentView: View {
         .sheet(item: $previewTorrent) { torrent in
             TorrentPreviewView(torrent: torrent, store: store) { url in NSWorkspace.shared.open(url) }
         }
-        .sheet(isPresented: $showsOrganization) { OrganizationView(store: store) }
+        .sheet(isPresented: $showsOrganization) { OrganizationView(store: store, initialCategoryName: organizationInitialCategory) }
         .sheet(isPresented: $showsAbout) { AboutView(serverVersion: store.serverVersion) }
         .sheet(item: $textAction) { action in
             ValueSheet(title: action.title, hint: action.hint, initialValue: initialValue(for: action), allowsEmpty: action == .category || action == .tags) { value in
@@ -284,6 +362,12 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removing downloaded files cannot be undone.")
+        }
+        .confirmationDialog("Remove all tags from selected torrents?", isPresented: $showsClearTagsConfirmation) {
+            Button("Remove All Tags", role: .destructive) {
+                runBulkAction(hashes: clearTagsHashes) { try await store.removeTorrentTags([], hashes: $0) }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("All downloads are complete", isPresented: $showsDownloadCompletionAction) {
             Button(downloadCompletionLabel, role: downloadCompletionAction == "shutdown" || downloadCompletionAction == "restart" ? .destructive : nil) {
@@ -373,7 +457,7 @@ struct ContentView: View {
     }
 
     private func toolbarLabel(_ title: String, image: String) -> some View {
-        Label(title, systemImage: image).labelStyle(ToolbarLabelStyle(showTitle: showToolbarLabels))
+        Label(title, systemImage: image).labelStyle(ToolbarLabelStyle(style: toolbarStyle))
     }
 
     private var lockedOverlay: some View {
@@ -423,18 +507,37 @@ struct ContentView: View {
             Toggle("Show Filter Sidebar", isOn: $showFiltersSidebar)
             Toggle("Show Detail Pane", isOn: $showDetailPane)
             Toggle("Show Status Bar", isOn: $showStatusBar)
+            Toggle("Show Toolbar", isOn: $showToolbar)
             Toggle("Show Speed in Window Title", isOn: $showSpeedInTitleBar)
-            Toggle("Toolbar Labels", isOn: $showToolbarLabels)
+            Toggle("Show Tracker Status Filters", isOn: $showTrackerStatusFilter)
+            Toggle("Separate Tracker Status Filters", isOn: $separateTrackerStatusFilter)
+            Toggle("Hide Empty Status Filters", isOn: $hideZeroStatusFilters)
+            Menu("Toolbar Style") {
+                toolbarStyleButton("system", title: "Follow System Style")
+                toolbarStyleButton("icons", title: "Icons Only")
+                toolbarStyleButton("text", title: "Text Only")
+                toolbarStyleButton("beside", title: "Text Alongside Icons")
+                toolbarStyleButton("below", title: "Text Under Icons")
+            }
             Divider()
             Button("Execution Log…") { showsExecutionLog = true }
             Button("Statistics…") { showsStatistics = true }
         } label: { toolbarLabel("View", image: "rectangle.split.3x1") }
     }
 
+    @ViewBuilder private func toolbarStyleButton(_ style: String, title: String) -> some View {
+        Button {
+            toolbarStyle = style
+        } label: {
+            if toolbarStyle == style { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
+        }
+    }
+
     private var settingsToolbarMenu: some View {
         Menu {
             Button("qBittorrent Preferences…") { showsBackendPreferences = true }
-            Button("Categories and Tags…") { showsOrganization = true }
+            Button("Categories and Tags…") { openOrganization() }
             Button("Connection…") { showsConnectionSettings = true }
             Divider()
             Button("Create Torrent…") { showsTorrentCreator = true }.disabled(!store.usesBundledBackend)
@@ -465,48 +568,114 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 sidebarSection("STATUS") {
                     ForEach(TorrentFilter.allCases) { item in
-                        sidebarRow(item.rawValue, symbol: item.symbol, count: torrents.filter(item.includes).count, selected: statusFilter == item && categoryFilter == nil && tagFilter == nil && trackerFilter == nil) {
+                        let count = torrents.filter(item.includes).count
+                        if !hideZeroStatusFilters || count > 0 || item == .all {
+                        sidebarRow(item.rawValue, symbol: item.symbol, count: count, selected: isSelected(item)) {
                             statusFilter = item
+                            trackerStatusFilter = nil
                             categoryFilter = nil
                             tagFilter = nil
                             trackerFilter = nil
+                        }
+                        .contextMenu { torrentFilterActions(hashes: torrents.filter(item.includes).map(\.id)) }
+                        }
+                    }
+                }
+                if showTrackerStatusFilter && separateTrackerStatusFilter {
+                    sidebarSection("TRACKER STATUS") {
+                        ForEach(TrackerStatusFilter.allCases) { item in
+                            let count = torrents.filter(item.includes).count
+                            if !hideZeroStatusFilters || count > 0 || item == .all {
+                                sidebarRow(item.rawValue, symbol: item.symbol, count: count, selected: isSelected(item)) {
+                                    selectTrackerStatus(item)
+                                }
+                                .contextMenu { torrentFilterActions(hashes: torrents.filter(item.includes).map(\.id)) }
+                            }
                         }
                     }
                 }
                 sidebarSection("CATEGORIES") {
-                    ForEach(Array(Set(torrents.map(\.category))).sorted(), id: \.self) { category in
-                        sidebarRow(category.isEmpty ? "Uncategorized" : category, symbol: "folder", count: torrents.filter { $0.category == category }.count, selected: categoryFilter == category) {
+                    ForEach(allFilterCategories, id: \.self) { category in
+                        sidebarRow(category.isEmpty ? "Uncategorized" : category.split(separator: "/").last.map(String.init) ?? category,
+                                   symbol: "folder", count: torrents.filter { $0.category == category || $0.category.hasPrefix(category + "/") }.count,
+                                   selected: categoryFilter == category, indent: CGFloat(category.filter { $0 == "/" }.count) * 12) {
                             categoryFilter = category
                             statusFilter = .all
+                            trackerStatusFilter = nil
                             tagFilter = nil
                             trackerFilter = nil
+                        }
+                        .contextMenu {
+                            Button("New Category…") { openOrganization() }
+                            Button("New Subcategory…") { openOrganization(initialCategory: category.isEmpty ? nil : category + "/") }
+                            Button("Manage Categories and Tags…") { openOrganization() }
+                            Button("Remove Unused Categories", role: .destructive) { Task { await removeUnusedCategories() } }
+                            Divider()
+                            torrentFilterActions(hashes: torrents.filter { $0.category == category || $0.category.hasPrefix(category + "/") }.map(\.id))
                         }
                     }
                 }
                 sidebarSection("TAGS") {
-                    sidebarRow("All", symbol: "tag", count: torrents.count, selected: tagFilter == nil && categoryFilter == nil && trackerFilter == nil && statusFilter == .all) {
+                    sidebarRow("All", symbol: "tag", count: torrents.count, selected: tagFilter == nil && categoryFilter == nil && trackerFilter == nil && trackerStatusFilter == nil && statusFilter == .all) {
                         categoryFilter = nil
                         statusFilter = .all
+                        trackerStatusFilter = nil
                         tagFilter = nil
                         trackerFilter = nil
                     }
-                    ForEach(Array(Set(torrents.flatMap { $0.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }.filter { !$0.isEmpty })).sorted(), id: \.self) { tag in
+                    ForEach(allFilterTags, id: \.self) { tag in
                         sidebarRow(tag, symbol: "tag", count: torrents.filter { $0.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(tag) }.count, selected: tagFilter == tag) {
                             tagFilter = tag
                             statusFilter = .all
+                            trackerStatusFilter = nil
                             categoryFilter = nil
                             trackerFilter = nil
+                        }
+                        .contextMenu {
+                            Button("Categories and Tags…") { openOrganization() }
+                            Button("Remove Unused Tags", role: .destructive) { Task { await removeUnusedTags() } }
+                            Divider()
+                            torrentFilterActions(hashes: torrents.filter { $0.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(tag) }.map(\.id))
                         }
                     }
                 }
                 sidebarSection("TRACKERS") {
-                    ForEach(Array(Set(torrents.map(\.tracker).filter { !$0.isEmpty })).sorted(), id: \.self) { tracker in
-                        sidebarRow(URL(string: tracker)?.host ?? tracker, symbol: "network", count: torrents.filter { $0.tracker == tracker }.count, selected: trackerFilter == tracker) {
-                            trackerFilter = tracker
+                    sidebarRow("All Trackers", symbol: "network", count: torrents.count, selected: trackerFilter == nil && trackerStatusFilter == nil && categoryFilter == nil && tagFilter == nil && statusFilter == .all) {
+                        trackerFilter = nil
+                        trackerStatusFilter = nil
+                        statusFilter = .all
+                        categoryFilter = nil
+                        tagFilter = nil
+                    }
+                    .contextMenu { torrentFilterActions(hashes: torrents.map(\.id)) }
+                    sidebarRow("Trackerless", symbol: "network.slash", count: torrents.filter { $0.trackerHosts.isEmpty }.count, selected: trackerFilter == "" && trackerStatusFilter == nil) {
+                        trackerFilter = ""
+                        trackerStatusFilter = nil
+                        statusFilter = .all
+                        categoryFilter = nil
+                        tagFilter = nil
+                    }
+                    .contextMenu { torrentFilterActions(hashes: torrents.filter { $0.trackerHosts.isEmpty }.map(\.id)) }
+                    if showTrackerStatusFilter && !separateTrackerStatusFilter {
+                        ForEach(TrackerStatusFilter.allCases.filter { $0 != .all }) { item in
+                            let count = torrents.filter(item.includes).count
+                            if !hideZeroStatusFilters || count > 0 {
+                                sidebarRow(item.rawValue, symbol: item.symbol, count: count, selected: isSelected(item)) {
+                                    selectTrackerStatus(item)
+                                }
+                                .contextMenu { torrentFilterActions(hashes: torrents.filter(item.includes).map(\.id)) }
+                            }
+                        }
+                    }
+                    ForEach(allFilterTrackerHosts, id: \.self) { trackerHost in
+                        sidebarRow(trackerHost, symbol: "network", count: torrents.filter { $0.trackerHosts.contains(trackerHost) }.count, selected: trackerFilter == trackerHost && trackerStatusFilter == nil) {
+                            trackerFilter = trackerHost
+                            trackerStatusFilter = nil
                             statusFilter = .all
                             categoryFilter = nil
                             tagFilter = nil
                         }
+                        .contextMenu { torrentFilterActions(hashes: torrents.filter { $0.trackerHosts.contains(trackerHost) }.map(\.id)) }
                     }
                 }
             }
@@ -524,6 +693,74 @@ struct ContentView: View {
         }
     }
 
+    private func selectTrackerStatus(_ filter: TrackerStatusFilter) {
+        trackerStatusFilter = filter == .all ? nil : filter
+        statusFilter = .all
+        categoryFilter = nil
+        tagFilter = nil
+        trackerFilter = nil
+    }
+
+    private func openOrganization(initialCategory: String? = nil) {
+        organizationInitialCategory = initialCategory
+        showsOrganization = true
+    }
+
+    private func torrentFilterActions(hashes: [String]) -> some View {
+        Group {
+            Button("Start Torrents") {
+                runBulkAction(hashes: hashes) { try await store.command(.start, hashes: $0) }
+            }
+            .disabled(hashes.isEmpty)
+            Button("Force Start Torrents") {
+                runBulkAction(hashes: hashes) { try await store.setForceStart(true, hashes: $0) }
+            }
+            .disabled(hashes.isEmpty)
+            Button("Stop Torrents") {
+                runBulkAction(hashes: hashes) { try await store.command(.stop, hashes: $0) }
+            }
+            .disabled(hashes.isEmpty)
+            Button("Remove Torrents…", role: .destructive) {
+                selectedTorrentIDs = Set(hashes)
+                showsRemoveConfirmation = true
+            }
+            .disabled(hashes.isEmpty)
+        }
+    }
+
+    private func loadFilterCatalogs() async {
+        guard store.isConnected else { return }
+        do {
+            let data = try await store.categoriesData()
+            if let values = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                categoryCatalog = Set(values.keys)
+            }
+        } catch { categoryCatalog = [] }
+        do {
+            let data = try await store.tagsData()
+            tagCatalog = Set((try JSONSerialization.jsonObject(with: data) as? [String]) ?? [])
+        } catch { tagCatalog = [] }
+    }
+
+    private func removeUnusedCategories() async {
+        let unused = categoryCatalog.filter { category in
+            !torrents.contains { $0.category == category || $0.category.hasPrefix(category + "/") }
+        }.sorted()
+        do {
+            for category in unused { try await store.removeCategory(category) }
+            await loadFilterCatalogs()
+        } catch { actionError = error.localizedDescription }
+    }
+
+    private func removeUnusedTags() async {
+        let assigned = Set(torrents.flatMap { $0.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } })
+        let unused = tagCatalog.subtracting(assigned)
+        do {
+            for tag in unused.sorted() { try await store.removeTag(tag) }
+            await loadFilterCatalogs()
+        } catch { actionError = error.localizedDescription }
+    }
+
     private func sidebarSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -535,7 +772,7 @@ struct ContentView: View {
         }
     }
 
-    private func sidebarRow(_ title: String, symbol: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func sidebarRow(_ title: String, symbol: String, count: Int, selected: Bool, indent: CGFloat = 0, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
                 Image(systemName: symbol).frame(width: 17)
@@ -546,7 +783,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             .font(.subheadline)
-            .padding(.horizontal, 10)
+            .padding(.leading, 10 + indent)
+            .padding(.trailing, 10)
             .padding(.vertical, 6)
             .contentShape(Rectangle())
             .background(selected ? Color.accentColor.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
@@ -576,6 +814,7 @@ struct ContentView: View {
                 TextField("Filter torrents…", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 200)
+                    .focused($torrentFilterFocused)
                 Menu {
                     ForEach(TorrentSort.allCases) { field in
                         Button(field.title) { sortField = field }
@@ -737,42 +976,68 @@ struct ContentView: View {
 
     private func generalDetails(for torrent: Torrent) -> some View {
         ScrollView([.horizontal, .vertical]) {
+        VStack(alignment: .leading, spacing: 12) {
+        if !pieceStates.isEmpty || !pieceAvailability.isEmpty {
+            TorrentPieceBars(states: pieceStates, availability: pieceAvailability)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+        }
         HStack(alignment: .top, spacing: 30) {
             VStack(alignment: .leading, spacing: 11) {
                 detailLine("Name", torrent.name)
                 detailLine("Status", torrent.state.rawValue)
-                detailLine("Progress", torrent.progress.formatted(.percent.precision(.fractionLength(0))))
+                detailLine("Progress", (properties?.progress ?? torrent.progress).formatted(.percent.precision(.fractionLength(1))))
+                if let properties {
+                    detailLine("Availability", properties.availability.map { String(format: "%.3f", $0) } ?? "—")
+                    detailLine("Pieces", piecesText(properties))
+                    detailLine("Info Hash v1", display(properties.infohash_v1))
+                    detailLine("Info Hash v2", display(properties.infohash_v2))
+                }
                 detailLine("Size", torrent.size)
                 if let savePath = properties?.save_path {
                     detailLine("Save path", savePath)
                 }
+                if let downloadPath = properties?.download_path {
+                    detailLine("Download path", downloadPath)
+                }
                 detailLine("Torrent ID", torrent.id)
-                if let comment = properties?.comment, !comment.isEmpty { detailLine("Comment", comment) }
+                if let properties {
+                    detailLine("Private", properties.is_private == true ? "Yes" : "No")
+                    if let creator = properties.created_by, !creator.isEmpty { detailLine("Created by", creator) }
+                    if let comment = properties.comment, !comment.isEmpty { detailLine("Comment", comment) }
+                }
             }
             VStack(alignment: .leading, spacing: 11) {
                 detailLine("Download speed", torrent.downloadRate)
+                if let speed = properties?.dl_speed_avg { detailLine("Average download speed", rateText(speed)) }
                 detailLine("Upload speed", torrent.uploadRate)
-                detailLine("Peers", "\(torrent.peers)")
-                detailLine("Time remaining", torrent.eta)
-                detailLine("Ratio", torrent.ratio.formatted(.number.precision(.fractionLength(2))))
                 if let properties {
+                    if let speed = properties.up_speed_avg { detailLine("Average upload speed", rateText(speed)) }
+                    detailLine("Peers", countWithTotal(properties.peers, total: properties.peers_total))
+                    detailLine("Seeds", countWithTotal(properties.seeds, total: properties.seeds_total))
+                    detailLine("Connections", countWithLimit(properties.nb_connections, limit: properties.nb_connections_limit))
+                    detailLine("Time remaining", properties.eta.map(durationText) ?? torrent.eta)
+                    detailLine("Download limit", limitText(properties.dl_limit))
+                    detailLine("Upload limit", limitText(properties.up_limit))
                     detailLine("Downloaded", bytesText(properties.total_downloaded))
+                    detailLine("Downloaded this session", bytesText(properties.total_downloaded_session))
                     detailLine("Uploaded", bytesText(properties.total_uploaded))
-                    detailLine("Availability", properties.availability.map { String(format: "%.2f", $0) } ?? "—")
-                    detailLine("Total seeds", "\(properties.seeds_total ?? 0)")
-                    detailLine("Total peers", "\(properties.peers_total ?? 0)")
+                    detailLine("Uploaded this session", bytesText(properties.total_uploaded_session))
+                    detailLine("Wasted", bytesText(properties.total_wasted))
+                    detailLine("Share ratio", ratioText(properties.share_ratio ?? torrent.ratio))
+                    detailLine("Popularity", ratioText(properties.popularity))
                 }
             }
             VStack(alignment: .leading, spacing: 11) {
                 if let properties {
+                    detailLine("Total size", bytesText(properties.total_size))
+                    detailLine("Reannounce in", properties.reannounce.map(durationText) ?? "—")
                     detailLine("Added", dateText(properties.addition_date))
                     detailLine("Completed", dateText(properties.completion_date))
                     detailLine("Created", dateText(properties.creation_date))
                     detailLine("Last seen", dateText(properties.last_seen))
                     detailLine("Active time", durationText(properties.time_elapsed))
                     detailLine("Seeding time", durationText(properties.seeding_time))
-                    detailLine("Private", properties.is_private == true ? "Yes" : "No")
-                    if let creator = properties.created_by, !creator.isEmpty { detailLine("Created by", creator) }
                 }
             }
             Spacer(minLength: 0)
@@ -780,11 +1045,50 @@ struct ContentView: View {
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        }
     }
 
     private func bytesText(_ bytes: Int64?) -> String {
         guard let bytes, bytes >= 0 else { return "—" }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func rateText(_ bytesPerSecond: Int64) -> String {
+        guard bytesPerSecond >= 0 else { return "—" }
+        return ByteCountFormatter.string(fromByteCount: bytesPerSecond, countStyle: .binary) + "/s"
+    }
+
+    private func limitText(_ bytesPerSecond: Int64?) -> String {
+        guard let bytesPerSecond else { return "—" }
+        return bytesPerSecond <= 0 ? "∞" : rateText(bytesPerSecond)
+    }
+
+    private func ratioText(_ ratio: Double?) -> String {
+        guard let ratio, ratio.isFinite else { return "—" }
+        return ratio < 0 ? "∞" : ratio.formatted(.number.precision(.fractionLength(2)))
+    }
+
+    private func display(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "—" }
+        return value
+    }
+
+    private func countWithTotal(_ count: Int?, total: Int?) -> String {
+        guard let count else { return "—" }
+        guard let total, total >= 0 else { return "\(count)" }
+        return "\(count) (\(total) total)"
+    }
+
+    private func countWithLimit(_ count: Int?, limit: Int?) -> String {
+        guard let count else { return "—" }
+        guard let limit, limit >= 0 else { return "\(count)" }
+        return "\(count) (\(limit) max)"
+    }
+
+    private func piecesText(_ properties: TorrentProperties) -> String {
+        guard let count = properties.pieces_num, let pieceSize = properties.piece_size else { return "—" }
+        let have = properties.pieces_have.map(String.init) ?? "—"
+        return "\(have) of \(count) × \(ByteCountFormatter.string(fromByteCount: pieceSize, countStyle: .file))"
     }
 
     private func dateText(_ timestamp: Int64?) -> String {
@@ -834,64 +1138,204 @@ struct ContentView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            List(trackers) { tracker in
-                HStack {
-                    Text("Tier \((tracker.tier ?? 0) + 1)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Divider().frame(height: 14)
-                    Text(tracker.url).lineLimit(1)
-                    Spacer()
-                    Text("Seeds: \(tracker.num_seeds ?? 0)")
-                    Text("Peers: \(tracker.num_peers ?? 0)")
-                }
-                .font(.caption)
-                .contextMenu {
-                    Button("Edit URL…") { showDetailInput(.editTracker(tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: tracker.url) }
-                    Button("Copy URL") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(tracker.url, forType: .string) }
-                    Menu("Move to Tier") {
-                        ForEach(availableTrackerTiers, id: \.self) { tier in
-                            Button("Tier \(tier + 1)\(tier == (tracker.tier ?? 0) ? " ✓" : "")") {
-                                Task { await performDetailAction { try await store.moveTracker(hash: $0, url: tracker.url, tier: tier) } }
-                            }
-                        }
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        trackerHeader("Tier", width: 46)
+                        trackerHeader("URL / Endpoint", width: 260)
+                        trackerHeader("Status", width: 120)
+                        trackerHeader("Peers", width: 55)
+                        trackerHeader("Seeds", width: 55)
+                        trackerHeader("Leeches", width: 60)
+                        trackerHeader("Downloaded", width: 80)
+                        trackerHeader("Next Announce", width: 105)
+                        trackerHeader("Min Announce", width: 105)
+                        trackerHeader("Message", width: 260)
                     }
-                    Button("Remove Tracker", role: .destructive) {
-                        Task { await performDetailAction { try await store.removeTracker(hash: $0, url: tracker.url) } }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    Divider()
+                    ForEach(trackers) { tracker in
+                        trackerRow(tracker)
+                        ForEach(tracker.endpoints ?? []) { endpoint in
+                            HStack(spacing: 10) {
+                                Text("↳").frame(width: 46, alignment: .leading)
+                                    .foregroundStyle(.tertiary)
+                                trackerCell(endpoint.name, width: 260)
+                                trackerCell(trackerStatusText(endpoint.status, updating: endpoint.updating), width: 120)
+                                trackerCell(countText(endpoint.num_peers), width: 55)
+                                trackerCell(countText(endpoint.num_seeds), width: 55)
+                                trackerCell(countText(endpoint.num_leeches), width: 60)
+                                trackerCell(countText(endpoint.num_downloaded), width: 80)
+                                trackerCell(announceText(endpoint.next_announce), width: 105)
+                                trackerCell(announceText(endpoint.min_announce), width: 105)
+                                trackerCell(endpoint.msg ?? "", width: 260)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.secondary.opacity(0.04))
+                        }
                     }
                 }
             }
         }
     }
 
+    private func trackerRow(_ tracker: TorrentTracker) -> some View {
+        HStack(spacing: 10) {
+            trackerCell(tracker.tier.map { $0 < 0 ? "—" : "\($0 + 1)" } ?? "—", width: 46)
+            trackerCell(tracker.url, width: 260)
+            trackerCell(trackerStatusText(tracker.status, updating: tracker.updating), width: 120)
+            trackerCell(countText(tracker.num_peers), width: 55)
+            trackerCell(countText(tracker.num_seeds), width: 55)
+            trackerCell(countText(tracker.num_leeches), width: 60)
+            trackerCell(countText(tracker.num_downloaded), width: 80)
+            trackerCell(announceText(tracker.next_announce), width: 105)
+            trackerCell(announceText(tracker.min_announce), width: 105)
+            trackerCell(tracker.msg ?? "", width: 260)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .contextMenu {
+            if (tracker.tier ?? -1) >= 0 {
+                Button("Edit URL…") { showDetailInput(.editTracker(tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: tracker.url) }
+                Menu("Move to Tier") {
+                    ForEach(availableTrackerTiers, id: \.self) { tier in
+                        Button("Tier \(tier + 1)\(tier == (tracker.tier ?? 0) ? " ✓" : "")") {
+                            Task { await performDetailAction { try await store.moveTracker(hash: $0, url: tracker.url, tier: tier) } }
+                        }
+                    }
+                }
+                Button("Remove Tracker", role: .destructive) {
+                    Task { await performDetailAction { try await store.removeTracker(hash: $0, url: tracker.url) } }
+                }
+            }
+            if !(tracker.url.hasPrefix("** [")) {
+                Button("Copy URL") { copyToPasteboard(tracker.url) }
+            }
+            if (tracker.tier ?? -1) >= 0, selectedTorrent?.state != .paused {
+                Button("Force Reannounce to This Tracker") {
+                    Task { await performDetailAction { try await store.reannounceTrackers(hash: $0, urls: [tracker.url]) } }
+                }
+            }
+            if selectedTorrent?.state != .paused {
+                Button("Force Reannounce to All Trackers") {
+                    Task { await performDetailAction { try await store.command(.reannounce, hashes: [$0]) } }
+                }
+            }
+        }
+        .font(.caption)
+    }
+
+    private func trackerHeader(_ text: String, width: CGFloat) -> some View {
+        Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(width: width, alignment: .leading)
+    }
+
+    private func trackerCell(_ text: String, width: CGFloat) -> some View {
+        Text(text.isEmpty ? "—" : text).lineLimit(1).help(text)
+            .frame(width: width, alignment: .leading)
+    }
+
+    private func countText(_ count: Int?) -> String {
+        guard let count, count >= 0 else { return "—" }
+        return "\(count)"
+    }
+
+    private func trackerStatusText(_ status: Int?, updating: Bool?) -> String {
+        if updating == true { return "Updating…" }
+        return switch status {
+        case 0: "Disabled"
+        case 1: "Not contacted yet"
+        case 2: "Working"
+        case 4: "Not working"
+        case 5: "Tracker error"
+        case 6: "Unreachable"
+        default: "—"
+        }
+    }
+
+    private func announceText(_ timestamp: Int64?) -> String {
+        guard let timestamp, timestamp > 0 else { return "—" }
+        return durationText(max(0, timestamp - Int64(Date().timeIntervalSince1970)))
+    }
+
     private var availableTrackerTiers: [Int] {
-        Array(0...max(1, trackers.compactMap(\.tier).max() ?? 0))
+        Array(0...max(1, trackers.compactMap(\.tier).filter { $0 >= 0 }.max() ?? 0))
     }
 
     private var fileDetails: some View {
-        List(files) { file in
+        VStack(spacing: 0) {
             HStack {
-                Text(file.name).lineLimit(1)
+                Text("Content").font(.caption.weight(.semibold))
                 Spacer()
-                Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
-                Text(file.progress.formatted(.percent.precision(.fractionLength(0))))
-                Text(file.priority == 0 ? "Skip" : file.priority == 6 ? "High" : file.priority == 7 ? "Maximum" : "Normal")
-                    .foregroundStyle(.secondary)
+                Button("Select All") { selectedFileIDs = Set(files.map(\.id)) }
+                    .disabled(files.isEmpty)
+                Button("Select None") { selectedFileIDs = [] }
+                    .disabled(selectedFileIDs.isEmpty)
+                Menu("Priority") { filePriorityActions(for: selectedFileIDs) }
+                    .disabled(selectedFileIDs.isEmpty)
             }
-            .font(.caption)
-            .contextMenu {
-                if let torrent = selectedTorrent, isPreviewable(file) {
-                    Button("Preview File") { openTorrentFile(file, in: torrent) }
-                        .disabled(!torrentFileExists(file, in: torrent))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            if files.isEmpty {
+                ContentUnavailableView("No Files", systemImage: "doc.text", description: Text("File information is unavailable until torrent metadata has loaded."))
+            } else {
+                VStack(spacing: 0) {
+                    HStack {
+                        peerColumnHeader("Name", width: 520)
+                        peerColumnHeader("Size", width: 100)
+                        peerColumnHeader("Availability", width: 100)
+                        peerColumnHeader("Progress", width: 80)
+                        peerColumnHeader("Priority", width: 110)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    Divider()
+                    List(files, selection: $selectedFileIDs) { file in
+                        HStack(spacing: 12) {
+                            Text(file.name).lineLimit(1).frame(width: 520, alignment: .leading)
+                            Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                                .frame(width: 100, alignment: .leading)
+                            Text(file.availability.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "—")
+                                .frame(width: 100, alignment: .leading)
+                            Text(file.progress.formatted(.percent.precision(.fractionLength(0))))
+                                .frame(width: 80, alignment: .leading)
+                            Text(filePriorityLabel(file.priority))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 110, alignment: .leading)
+                        }
+                        .font(.caption)
+                        .tag(file.id)
+                        .contextMenu {
+                            if let torrent = selectedTorrent, isPreviewable(file) {
+                                Button("Preview File") { openTorrentFile(file, in: torrent) }
+                                    .disabled(!torrentFileExists(file, in: torrent))
+                            }
+                            filePriorityActions(for: selectedFileIDs.contains(file.id) ? selectedFileIDs : [file.id])
+                            Button("Rename…") { showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent) }
+                        }
+                    }
+                    .listStyle(.inset)
                 }
-                Menu("Download Priority") {
-                    Button("Do Not Download") { setFilePriority(file, to: 0) }
-                    Button("Normal") { setFilePriority(file, to: 1) }
-                    Button("High") { setFilePriority(file, to: 6) }
-                    Button("Maximum") { setFilePriority(file, to: 7) }
-                }
-                Button("Rename…") { showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent) }
             }
+        }
+    }
+
+    @ViewBuilder private func filePriorityActions(for selection: Set<Int>) -> some View {
+        Button("Do Not Download") { setFilePriority(selection, to: 0) }
+        Button("Normal") { setFilePriority(selection, to: 1) }
+        Button("High") { setFilePriority(selection, to: 6) }
+        Button("Maximum") { setFilePriority(selection, to: 7) }
+    }
+
+    private func filePriorityLabel(_ priority: Int) -> String {
+        switch priority {
+        case 0: "Do Not Download"
+        case 6: "High"
+        case 7: "Maximum"
+        default: "Normal"
         }
     }
 
@@ -1011,12 +1455,17 @@ struct ContentView: View {
 
     private var speedDetails: some View {
         let cutoff = Date().addingTimeInterval(-TimeInterval(speedGraphPeriod))
-        let history = (store.speedHistory[selectedTorrentID ?? ""] ?? []).filter { $0.date >= cutoff }
+        let recent = store.sessionSpeedHistory.filter { $0.date >= cutoff }
+        let step = max(1, (recent.count + 899) / 900)
+        var history = recent.enumerated().compactMap { $0.offset.isMultiple(of: step) ? $0.element : nil }
+        if let last = recent.last, history.last?.id != last.id { history.append(last) }
+        let enabledSeries = SpeedGraphSeries.allCases.filter(isGraphEnabled)
+        let maximumRate = history.flatMap { sample in enabledSeries.map { sample.value(for: $0) } }.max() ?? 0
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
-                Label("Download \(selectedTorrent?.downloadRate ?? "0 B/s")", systemImage: "arrow.down")
+                Label("Total Download \(TransferStatus.rateText(store.transferStatus.totalDownloadRate))", systemImage: "arrow.down")
                     .foregroundStyle(.blue)
-                Label("Upload \(selectedTorrent?.uploadRate ?? "0 B/s")", systemImage: "arrow.up")
+                Label("Total Upload \(TransferStatus.rateText(store.transferStatus.totalUploadRate))", systemImage: "arrow.up")
                     .foregroundStyle(.green)
                 Spacer()
                 Picker("Period", selection: $speedGraphPeriod) {
@@ -1030,41 +1479,74 @@ struct ContentView: View {
                 }
                 .frame(width: 130)
                 Menu("Select Graphs") {
-                    Toggle("Download", isOn: $showDownloadGraph)
-                    Toggle("Upload", isOn: $showUploadGraph)
+                    Toggle("Total Upload", isOn: $showTotalUploadGraph)
+                    Toggle("Total Download", isOn: $showTotalDownloadGraph)
+                    Toggle("Payload Upload", isOn: $showPayloadUploadGraph)
+                    Toggle("Payload Download", isOn: $showPayloadDownloadGraph)
+                    Toggle("Overhead Upload", isOn: $showOverheadUploadGraph)
+                    Toggle("Overhead Download", isOn: $showOverheadDownloadGraph)
+                    Toggle("DHT Upload", isOn: $showDHTUploadGraph)
+                    Toggle("DHT Download", isOn: $showDHTDownloadGraph)
+                    Toggle("Tracker Upload", isOn: $showTrackerUploadGraph)
+                    Toggle("Tracker Download", isOn: $showTrackerDownloadGraph)
                 }
             }
             .font(.caption)
             Chart {
-                ForEach(history) { sample in
-                    if showDownloadGraph {
-                        LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.download), series: .value("Direction", "Download"))
-                            .foregroundStyle(.blue)
-                    }
-                    if showUploadGraph {
-                        LineMark(x: .value("Time", sample.date), y: .value("Bytes/s", sample.upload), series: .value("Direction", "Upload"))
-                            .foregroundStyle(.green)
+                ForEach(enabledSeries) { series in
+                    ForEach(history) { sample in
+                        LineMark(
+                            x: .value("Time", sample.date),
+                            y: .value("Bytes/s", sample.value(for: series)),
+                            series: .value("Graph", series.title)
+                        )
+                        .foregroundStyle(by: .value("Graph", series.title))
                     }
                 }
             }
-            .chartLegend(.hidden)
+            .chartLegend(position: .bottom, spacing: 6)
             .chartXAxisLabel("Time")
             .chartYAxisLabel("Bytes per second")
-            .chartYScale(domain: 0...max(1024, history.map { max($0.download, $0.upload) }.max() ?? 0))
+            .chartForegroundStyleScale(domain: SpeedGraphSeries.allCases.map(\.title), range: [.blue, .green, .cyan, .mint, .orange, .yellow, .purple, .pink, .indigo, .teal])
+            .chartYScale(domain: 0...max(1024, maximumRate))
         }
         .padding(18)
     }
 
+    private func isGraphEnabled(_ series: SpeedGraphSeries) -> Bool {
+        switch series {
+        case .totalUpload: showTotalUploadGraph
+        case .totalDownload: showTotalDownloadGraph
+        case .payloadUpload: showPayloadUploadGraph
+        case .payloadDownload: showPayloadDownloadGraph
+        case .overheadUpload: showOverheadUploadGraph
+        case .overheadDownload: showOverheadDownloadGraph
+        case .dhtUpload: showDHTUploadGraph
+        case .dhtDownload: showDHTDownloadGraph
+        case .trackerUpload: showTrackerUploadGraph
+        case .trackerDownload: showTrackerDownloadGraph
+        }
+    }
+
     private func loadDetails() async {
         properties = nil
+        pieceStates = []
+        pieceAvailability = []
         trackers = []
         files = []
+        selectedFileIDs = []
         peers = []
         webSeeds = []
         guard let selectedTorrentID, store.isConnected else { return }
         do {
             switch detailTab {
-            case .general: properties = try await store.properties(for: selectedTorrentID)
+            case .general:
+                async let propertyRequest = store.properties(for: selectedTorrentID)
+                async let statesRequest = try? store.pieceStates(for: selectedTorrentID)
+                async let availabilityRequest = try? store.pieceAvailability(for: selectedTorrentID)
+                properties = try await propertyRequest
+                pieceStates = (await statesRequest) ?? []
+                pieceAvailability = (await availabilityRequest) ?? []
             case .trackers: trackers = try await store.trackers(for: selectedTorrentID)
             case .content: files = try await store.files(for: selectedTorrentID)
             case .peers:
@@ -1094,8 +1576,36 @@ struct ContentView: View {
         Divider()
         Button("Rename…") { beginTextAction(.rename, target: target) }.disabled(hashes.count != 1)
         Button("Set Location…") { beginTextAction(.location, target: target) }
-        Button("Set Category…") { beginTextAction(.category, target: target) }
-        Button("Set Tags…") { beginTextAction(.tags, target: target) }
+        Menu("Category") {
+            Button("New Category…") { openOrganization() }
+            Divider()
+            Button("Uncategorized") { runBulkAction(hashes: hashes) { try await store.setCategory("", hashes: $0) } }
+            ForEach(allFilterCategories.filter { !$0.isEmpty }, id: \.self) { category in
+                Button(category) { runBulkAction(hashes: hashes) { try await store.setCategory(category, hashes: $0) } }
+            }
+        }
+        Menu("Tags") {
+            Button("Add or Edit Tags…") { beginTextAction(.tags, target: target) }
+            Button("Remove All Tags…", role: .destructive) {
+                clearTagsHashes = hashes
+                showsClearTagsConfirmation = true
+            }
+            Divider()
+            ForEach(allFilterTags, id: \.self) { tag in
+                let assignedCount = torrents.filter { target.contains($0.id) && torrentHasTag($0, tag) }.count
+                let isAssignedToAll = !hashes.isEmpty && assignedCount == hashes.count
+                let isPartiallyAssigned = assignedCount > 0 && !isAssignedToAll
+                Button {
+                    runBulkAction(hashes: hashes) { selected in
+                        if isAssignedToAll { try await store.removeTorrentTags([tag], hashes: selected) }
+                        else { try await store.addTags([tag], hashes: selected) }
+                    }
+                } label: {
+                    Label(tag + (isPartiallyAssigned ? " (Mixed)" : ""), systemImage: isAssignedToAll ? "checkmark.circle.fill" : "circle")
+                }
+            }
+        }
+        Button("Manage Trackers") { detailTab = .trackers }.disabled(hashes.count != 1)
         Button("Torrent Options…") { torrentOptionsTarget = TorrentOptionsTarget(hashes: hashes) }
         Button("Preview File…") { previewTorrent = targetTorrent }
             .disabled(hashes.count != 1)
@@ -1220,9 +1730,10 @@ struct ContentView: View {
         } catch { actionError = error.localizedDescription }
     }
 
-    private func setFilePriority(_ file: TorrentFile, to priority: Int) {
+    private func setFilePriority(_ fileIDs: Set<Int>, to priority: Int) {
+        guard !fileIDs.isEmpty else { return }
         Task {
-            await performDetailAction { try await store.setFilePriority(hash: $0, index: file.index, priority: priority) }
+            await performDetailAction { try await store.setFilePriority(hash: $0, indices: fileIDs.sorted(), priority: priority) }
         }
     }
 
@@ -1474,12 +1985,14 @@ private struct PendingTorrentFile: Identifiable {
 }
 
 private struct ToolbarLabelStyle: LabelStyle {
-    let showTitle: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        if showTitle {
-            HStack(spacing: 5) { configuration.icon; configuration.title }
-        } else {
-            configuration.icon
+    let style: String
+
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        switch style {
+        case "icons": configuration.icon
+        case "text": configuration.title
+        case "below": VStack(spacing: 3) { configuration.icon; configuration.title }
+        default: HStack(spacing: 5) { configuration.icon; configuration.title }
         }
     }
 }

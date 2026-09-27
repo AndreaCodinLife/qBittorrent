@@ -7,6 +7,7 @@ struct QBitXApp: App {
             ContentView()
                 .frame(minWidth: 980, minHeight: 620)
         }
+        .commands { QBitXCommands() }
         .defaultSize(width: 1220, height: 760)
     }
 }

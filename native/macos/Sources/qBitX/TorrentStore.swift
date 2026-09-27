@@ -16,7 +16,7 @@ final class TorrentStore {
     private(set) var connectionError: String?
     private(set) var isConnected = false
     private(set) var connectionName = "Local library"
-    private(set) var speedHistory: [String: [TransferSample]] = [:]
+    private(set) var sessionSpeedHistory: [TransferSample] = []
 
     private let backend = BundledBackend()
     private var api: QBittorrentAPI?
@@ -24,7 +24,7 @@ final class TorrentStore {
     func run() async {
         connectionError = nil
         isConnected = false
-        speedHistory = [:]
+        sessionSpeedHistory = []
         api = nil
         do {
             let connectedAPI: QBittorrentAPI
@@ -134,16 +134,12 @@ final class TorrentStore {
             transferStatus = try await newStatus
             isConnected = true
             let now = Date()
-            for torrent in torrents {
-                var samples = speedHistory[torrent.id, default: []]
-                if samples.last.map({ now.timeIntervalSince($0.date) >= 10 }) ?? true {
-                    samples.append(TransferSample(date: now, download: torrent.downloadRateBytes, upload: torrent.uploadRateBytes))
-                }
-                if samples.count > 8_640 { samples.removeFirst(samples.count - 8_640) }
-                speedHistory[torrent.id] = samples
+            if sessionSpeedHistory.last.map({ now.timeIntervalSince($0.date) >= 2 }) ?? true {
+                sessionSpeedHistory.append(TransferSample(date: now, status: transferStatus))
             }
-            let activeHashes = Set(torrents.map(\.id))
-            speedHistory = speedHistory.filter { activeHashes.contains($0.key) }
+            if sessionSpeedHistory.count > 43_200 {
+                sessionSpeedHistory.removeFirst(sessionSpeedHistory.count - 43_200)
+            }
             connectionError = nil
         } catch is CancellationError {
             return
@@ -247,6 +243,18 @@ final class TorrentStore {
         await refresh()
     }
 
+    func addTags(_ tags: [String], hashes: [String]) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.addTags(tags, hashes: hashes)
+        await refresh()
+    }
+
+    func removeTorrentTags(_ tags: [String], hashes: [String]) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeTorrentTags(tags, hashes: hashes)
+        await refresh()
+    }
+
     func rename(_ hash: String, to name: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.rename(hash, to: name)
@@ -308,6 +316,16 @@ final class TorrentStore {
         return try await api.properties(for: hash)
     }
 
+    func pieceStates(for hash: String) async throws -> [Int] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.pieceStates(for: hash)
+    }
+
+    func pieceAvailability(for hash: String) async throws -> [Int] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.pieceAvailability(for: hash)
+    }
+
     func trackers(for hash: String) async throws -> [TorrentTracker] {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.trackers(for: hash)
@@ -318,9 +336,9 @@ final class TorrentStore {
         return try await api.files(for: hash)
     }
 
-    func setFilePriority(hash: String, index: Int, priority: Int) async throws {
+    func setFilePriority(hash: String, indices: [Int], priority: Int) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.setFilePriority(hash: hash, index: index, priority: priority)
+        try await api.setFilePriority(hash: hash, indices: indices, priority: priority)
     }
 
     func renameFile(hash: String, oldPath: String, newPath: String) async throws {
@@ -341,6 +359,11 @@ final class TorrentStore {
     func moveTracker(hash: String, url: String, tier: Int) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.moveTracker(hash: hash, url: url, tier: tier)
+    }
+
+    func reannounceTrackers(hash: String, urls: [String]) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.reannounceTrackers(hash: hash, urls: urls)
     }
 
     func removeTracker(hash: String, url: String) async throws {
@@ -545,7 +568,70 @@ final class TorrentStore {
 
 struct TransferSample: Identifiable {
     let date: Date
-    let download: Int64
-    let upload: Int64
+    let totalDownload: Int64
+    let totalUpload: Int64
+    let payloadDownload: Int64
+    let payloadUpload: Int64
+    let overheadDownload: Int64
+    let overheadUpload: Int64
+    let dhtDownload: Int64
+    let dhtUpload: Int64
+    let trackerDownload: Int64
+    let trackerUpload: Int64
+
+    init(date: Date, status: TransferStatus) {
+        self.date = date
+        totalDownload = status.totalDownloadRate
+        totalUpload = status.totalUploadRate
+        payloadDownload = status.payloadDownloadRate
+        payloadUpload = status.payloadUploadRate
+        overheadDownload = status.overheadDownloadRate
+        overheadUpload = status.overheadUploadRate
+        dhtDownload = status.dhtDownloadRate
+        dhtUpload = status.dhtUploadRate
+        trackerDownload = status.trackerDownloadRate
+        trackerUpload = status.trackerUploadRate
+    }
+
+    func value(for series: SpeedGraphSeries) -> Int64 {
+        switch series {
+        case .totalUpload: totalUpload
+        case .totalDownload: totalDownload
+        case .payloadUpload: payloadUpload
+        case .payloadDownload: payloadDownload
+        case .overheadUpload: overheadUpload
+        case .overheadDownload: overheadDownload
+        case .dhtUpload: dhtUpload
+        case .dhtDownload: dhtDownload
+        case .trackerUpload: trackerUpload
+        case .trackerDownload: trackerDownload
+        }
+    }
+
     var id: Date { date }
+}
+
+enum SpeedGraphSeries: String, CaseIterable, Identifiable {
+    case totalUpload, totalDownload
+    case payloadUpload, payloadDownload
+    case overheadUpload, overheadDownload
+    case dhtUpload, dhtDownload
+    case trackerUpload, trackerDownload
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .totalUpload: "Total Upload"
+        case .totalDownload: "Total Download"
+        case .payloadUpload: "Payload Upload"
+        case .payloadDownload: "Payload Download"
+        case .overheadUpload: "Overhead Upload"
+        case .overheadDownload: "Overhead Download"
+        case .dhtUpload: "DHT Upload"
+        case .dhtDownload: "DHT Download"
+        case .trackerUpload: "Tracker Upload"
+        case .trackerDownload: "Tracker Download"
+        }
+    }
 }

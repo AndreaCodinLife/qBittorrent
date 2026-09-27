@@ -102,7 +102,7 @@ actor QBittorrentAPI {
     }
 
     func torrents() async throws -> [Torrent] {
-        let data = try await request("torrents/info")
+        let data = try await request("torrents/info", query: ["includeTrackers": "true"])
         let responses = try JSONDecoder().decode([TorrentResponse].self, from: data)
         let raw = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
         return responses.enumerated().map { index, response in
@@ -117,6 +117,16 @@ actor QBittorrentAPI {
         return TransferStatus(
             downloadRate: response.dl_info_speed ?? 0,
             uploadRate: response.up_info_speed ?? 0,
+            totalDownloadRate: response.total_dl_speed ?? response.dl_info_speed ?? 0,
+            totalUploadRate: response.total_up_speed ?? response.up_info_speed ?? 0,
+            payloadDownloadRate: response.payload_dl_speed ?? response.dl_info_speed ?? 0,
+            payloadUploadRate: response.payload_up_speed ?? response.up_info_speed ?? 0,
+            overheadDownloadRate: response.overhead_dl_speed ?? 0,
+            overheadUploadRate: response.overhead_up_speed ?? 0,
+            dhtDownloadRate: response.dht_dl_speed ?? 0,
+            dhtUploadRate: response.dht_up_speed ?? 0,
+            trackerDownloadRate: response.tracker_dl_speed ?? 0,
+            trackerUploadRate: response.tracker_up_speed ?? 0,
             dhtNodes: response.dht_nodes ?? 0,
             connectionStatus: response.connection_status ?? "disconnected"
         )
@@ -214,6 +224,16 @@ actor QBittorrentAPI {
         return try JSONDecoder().decode(TorrentProperties.self, from: data)
     }
 
+    func pieceStates(for hash: String) async throws -> [Int] {
+        let data = try await request("torrents/pieceStates", query: ["hash": hash])
+        return try JSONDecoder().decode([Int].self, from: data)
+    }
+
+    func pieceAvailability(for hash: String) async throws -> [Int] {
+        let data = try await request("torrents/pieceAvailability", query: ["hash": hash])
+        return try JSONDecoder().decode([Int].self, from: data)
+    }
+
     func trackers(for hash: String) async throws -> [TorrentTracker] {
         let data = try await request("torrents/trackers", query: ["hash": hash])
         return try JSONDecoder().decode([TorrentTracker].self, from: data)
@@ -224,9 +244,9 @@ actor QBittorrentAPI {
         return try JSONDecoder().decode([TorrentFile].self, from: data)
     }
 
-    func setFilePriority(hash: String, index: Int, priority: Int) async throws {
+    func setFilePriority(hash: String, indices: [Int], priority: Int) async throws {
         _ = try await request("torrents/filePrio", method: "POST", form: [
-            "hash": hash, "id": "\(index)", "priority": "\(priority)"
+            "hash": hash, "id": indices.map(String.init).joined(separator: "|"), "priority": "\(priority)"
         ])
     }
 
@@ -249,6 +269,12 @@ actor QBittorrentAPI {
     func moveTracker(hash: String, url: String, tier: Int) async throws {
         _ = try await request("torrents/editTracker", method: "POST", form: [
             "hash": hash, "url": url, "tier": "\(tier)"
+        ])
+    }
+
+    func reannounceTrackers(hash: String, urls: [String]) async throws {
+        _ = try await request("torrents/reannounce", method: "POST", form: [
+            "hashes": hash, "urls": urls.joined(separator: "|")
         ])
     }
 
@@ -566,6 +592,20 @@ actor QBittorrentAPI {
         _ = try await request("torrents/deleteTags", method: "POST", form: ["tags": name])
     }
 
+    func addTags(_ tags: [String], hashes: [String]) async throws {
+        guard !tags.isEmpty, !hashes.isEmpty else { return }
+        _ = try await request("torrents/addTags", method: "POST", form: [
+            "hashes": hashes.joined(separator: "|"), "tags": tags.joined(separator: ",")
+        ])
+    }
+
+    func removeTorrentTags(_ tags: [String], hashes: [String]) async throws {
+        guard !hashes.isEmpty else { return }
+        _ = try await request("torrents/removeTags", method: "POST", form: [
+            "hashes": hashes.joined(separator: "|"), "tags": tags.joined(separator: ",")
+        ])
+    }
+
     func remove(_ hash: String, deleteFiles: Bool) async throws {
         try await remove([hash], deleteFiles: deleteFiles)
     }
@@ -684,6 +724,7 @@ private struct TorrentResponse: Decodable {
     let category: String?
     let tags: String?
     let tracker: String?
+    let trackers: [TorrentTracker]?
     let size: Int64?
     let progress: Double?
     let dlspeed: Int64?
@@ -707,6 +748,12 @@ private struct TorrentResponse: Decodable {
             category: category ?? "",
             tags: tags ?? "",
             tracker: tracker ?? "",
+            trackerHosts: Array(Set((trackers ?? []).compactMap { URLComponents(string: $0.url)?.host?.lowercased() })).sorted(),
+            hasTrackerWarning: (trackers ?? []).contains { tracker in
+                tracker.status == 2 && (tracker.endpoints ?? []).contains { $0.status == 2 && !($0.msg?.isEmpty ?? true) }
+            },
+            hasTrackerError: (trackers ?? []).contains { $0.status == 5 },
+            hasOtherAnnounceError: (trackers ?? []).contains { $0.status == 4 || $0.status == 6 },
             sizeBytes: size ?? 0,
             progress: progress ?? 0,
             downloadRateBytes: dlspeed ?? 0,
@@ -768,6 +815,16 @@ private struct TorrentResponse: Decodable {
 private struct TransferResponse: Decodable {
     let dl_info_speed: Int64?
     let up_info_speed: Int64?
+    let total_dl_speed: Int64?
+    let total_up_speed: Int64?
+    let payload_dl_speed: Int64?
+    let payload_up_speed: Int64?
+    let overhead_dl_speed: Int64?
+    let overhead_up_speed: Int64?
+    let dht_dl_speed: Int64?
+    let dht_up_speed: Int64?
+    let tracker_dl_speed: Int64?
+    let tracker_up_speed: Int64?
     let dht_nodes: Int?
     let connection_status: String?
 }
@@ -814,23 +871,44 @@ struct SpeedLimits: Decodable, Sendable {
 
 struct TorrentProperties: Decodable, Sendable {
     let total_downloaded: Int64?
+    let total_downloaded_session: Int64?
     let total_uploaded: Int64?
+    let total_uploaded_session: Int64?
+    let total_wasted: Int64?
+    let dl_speed: Int64?
+    let up_speed: Int64?
     let save_path: String?
+    let download_path: String?
     let addition_date: Int64?
     let completion_date: Int64?
     let comment: String?
     let created_by: String?
     let total_size: Int64?
+    let eta: Int64?
+    let nb_connections: Int?
+    let nb_connections_limit: Int?
     let dl_speed_avg: Int64?
     let up_speed_avg: Int64?
+    let dl_limit: Int64?
+    let up_limit: Int64?
     let time_elapsed: Int64?
     let seeding_time: Int64?
     let availability: Double?
+    let share_ratio: Double?
+    let popularity: Double?
+    let reannounce: Int64?
+    let pieces_num: Int?
+    let piece_size: Int64?
+    let pieces_have: Int?
     let seeds: Int?
     let seeds_total: Int?
     let peers: Int?
     let peers_total: Int?
     let is_private: Bool?
+    let infohash_v1: String?
+    let infohash_v2: String?
+    let has_metadata: Bool?
+    let progress: Double?
     let creation_date: Int64?
     let last_seen: Int64?
 }
@@ -839,10 +917,31 @@ struct TorrentTracker: Decodable, Identifiable, Sendable {
     let url: String
     let tier: Int?
     let status: Int?
+    let updating: Bool?
     let num_peers: Int?
     let num_seeds: Int?
+    let num_leeches: Int?
+    let num_downloaded: Int?
     let msg: String?
+    let next_announce: Int64?
+    let min_announce: Int64?
+    let endpoints: [TorrentTrackerEndpoint]?
     var id: String { url }
+}
+
+struct TorrentTrackerEndpoint: Decodable, Identifiable, Sendable {
+    let name: String
+    let bt_version: Int?
+    let updating: Bool?
+    let status: Int?
+    let msg: String?
+    let num_peers: Int?
+    let num_seeds: Int?
+    let num_leeches: Int?
+    let num_downloaded: Int?
+    let next_announce: Int64?
+    let min_announce: Int64?
+    var id: String { "\(name)-\(bt_version ?? 0)" }
 }
 
 struct TorrentFile: Decodable, Identifiable, Sendable {
@@ -851,6 +950,7 @@ struct TorrentFile: Decodable, Identifiable, Sendable {
     let size: Int64
     let progress: Double
     let priority: Int
+    let availability: Double?
     var id: Int { index }
 }
 

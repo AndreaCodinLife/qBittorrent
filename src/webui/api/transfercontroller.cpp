@@ -53,6 +53,16 @@ const QString KEY_TRANSFER_UP_LIMIT = u"up_limit"_s;
 const QString KEY_TRANSFER_DL_LIMIT = u"dl_limit"_s;
 const QString KEY_TRANSFER_ALT_UP_LIMIT = u"alt_up_limit"_s;
 const QString KEY_TRANSFER_ALT_DL_LIMIT = u"alt_dl_limit"_s;
+const QString KEY_TRANSFER_TOTAL_DL_SPEED = u"total_dl_speed"_s;
+const QString KEY_TRANSFER_TOTAL_UP_SPEED = u"total_up_speed"_s;
+const QString KEY_TRANSFER_PAYLOAD_DL_SPEED = u"payload_dl_speed"_s;
+const QString KEY_TRANSFER_PAYLOAD_UP_SPEED = u"payload_up_speed"_s;
+const QString KEY_TRANSFER_OVERHEAD_DL_SPEED = u"overhead_dl_speed"_s;
+const QString KEY_TRANSFER_OVERHEAD_UP_SPEED = u"overhead_up_speed"_s;
+const QString KEY_TRANSFER_DHT_DL_SPEED = u"dht_dl_speed"_s;
+const QString KEY_TRANSFER_DHT_UP_SPEED = u"dht_up_speed"_s;
+const QString KEY_TRANSFER_TRACKER_DL_SPEED = u"tracker_dl_speed"_s;
+const QString KEY_TRANSFER_TRACKER_UP_SPEED = u"tracker_up_speed"_s;
 
 // Returns the global transfer information in JSON format.
 // The return value is a JSON-formatted dictionary.
@@ -75,8 +85,18 @@ void TransferController::infoAction()
     QJsonObject dict;
 
     dict[KEY_TRANSFER_DLSPEED] = static_cast<qint64>(sessionStatus.payloadDownloadRate);
+    dict[KEY_TRANSFER_TOTAL_DL_SPEED] = static_cast<qint64>(sessionStatus.downloadRate);
+    dict[KEY_TRANSFER_PAYLOAD_DL_SPEED] = static_cast<qint64>(sessionStatus.payloadDownloadRate);
+    dict[KEY_TRANSFER_OVERHEAD_DL_SPEED] = static_cast<qint64>(sessionStatus.ipOverheadDownloadRate);
+    dict[KEY_TRANSFER_DHT_DL_SPEED] = static_cast<qint64>(sessionStatus.dhtDownloadRate);
+    dict[KEY_TRANSFER_TRACKER_DL_SPEED] = static_cast<qint64>(sessionStatus.trackerDownloadRate);
     dict[KEY_TRANSFER_DLDATA] = static_cast<qint64>(sessionStatus.totalPayloadDownload);
     dict[KEY_TRANSFER_UPSPEED] = static_cast<qint64>(sessionStatus.payloadUploadRate);
+    dict[KEY_TRANSFER_TOTAL_UP_SPEED] = static_cast<qint64>(sessionStatus.uploadRate);
+    dict[KEY_TRANSFER_PAYLOAD_UP_SPEED] = static_cast<qint64>(sessionStatus.payloadUploadRate);
+    dict[KEY_TRANSFER_OVERHEAD_UP_SPEED] = static_cast<qint64>(sessionStatus.ipOverheadUploadRate);
+    dict[KEY_TRANSFER_DHT_UP_SPEED] = static_cast<qint64>(sessionStatus.dhtUploadRate);
+    dict[KEY_TRANSFER_TRACKER_UP_SPEED] = static_cast<qint64>(sessionStatus.trackerUploadRate);
     dict[KEY_TRANSFER_UPDATA] = static_cast<qint64>(sessionStatus.totalPayloadUpload);
     dict[KEY_TRANSFER_DLRATELIMIT] = btSession->downloadSpeedLimit();
     dict[KEY_TRANSFER_UPRATELIMIT] = btSession->uploadSpeedLimit();
