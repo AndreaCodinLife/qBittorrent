@@ -1,4 +1,5 @@
 import AppKit
+import RSSArticleSupport
 import RSSRuleSupport
 import SwiftUI
 import UniformTypeIdentifiers
@@ -25,7 +26,10 @@ struct RSSRulesView: View {
     @State private var selectedFeeds: Set<String> = []
     @State private var torrentParamsDraft = TorrentAddOptionsDraft(json: "{}")
     @State private var matches: [(String, [String])] = []
+    @State private var matchCandidates: [RSSRuleMatchCandidate] = []
+    @State private var matchSettings = RSSRuleMatchSettings.qBittorrentDefaults
     @State private var errorMessage: String?
+    @State private var successMessage: String?
     @State private var isSaving = false
     @State private var showsImport = false
     @State private var pendingClearDownloadHistoryRules: [String] = []
@@ -53,6 +57,24 @@ struct RSSRulesView: View {
         return "Use a season and episode list such as 1x2;8-15;5;30-;. End the filter with a semicolon."
     }
 
+    private var ignoreDaysLabel: String { "Ignore episodes older than \(ignoreDays) days" }
+
+    private var clearHistoryConfirmationMessage: String {
+        guard pendingClearDownloadHistoryRules.count == 1,
+              let name = pendingClearDownloadHistoryRules.first else {
+            return "Are you sure you want to clear downloaded episodes for the selected rules?"
+        }
+        return "Are you sure you want to clear downloaded episodes for ‘\(name)’?"
+    }
+
+    private var removeRulesConfirmationMessage: String {
+        guard pendingRemoveRuleNames.count == 1,
+              let name = pendingRemoveRuleNames.first else {
+            return "Are you sure you want to remove the selected download rules?"
+        }
+        return "Are you sure you want to remove ‘\(name)’?"
+    }
+
     private var lastMatchDescription: String {
         guard let selectedName,
               let value = rules[selectedName]?["lastMatch"] as? String,
@@ -63,182 +85,43 @@ struct RSSRulesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text("RSS Downloader Rules").font(.headline)
-                Spacer(minLength: 12)
-                Button("Import Rules…") { showsImport = true }.buttonStyle(.glass)
-                Button("Export JSON…") { exportRules(format: "json") }
-                    .buttonStyle(.glass)
-                    .disabled(rules.isEmpty || isSaving)
-                    .help(rules.isEmpty ? "Add or import a rule before exporting." : "Export rules as JSON")
-                if supportsLegacyRuleFiles {
-                    Button("Export .rssrules…") { exportRules(format: "legacy") }
-                        .buttonStyle(.glass)
-                        .disabled(rules.isEmpty || isSaving)
-                        .help(rules.isEmpty
-                            ? "Add or import a rule before exporting."
-                            : "Export in qBittorrent's legacy format; newer rule options may not be preserved.")
+        ruleDialogs
+            .task { await reload() }
+            .onChange(of: selectedRuleNames) { _, names in
+                if names.count == 1 {
+                    selectedName = names.first
+                } else {
+                    selectedName = nil
+                    if names.isEmpty {
+                        matches = []
+                        matchLoadID = UUID()
+                    } else {
+                        Task { await loadMatches(names.sorted()) }
+                    }
                 }
-                Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
-                    .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
-                    .help("Remove selected rules")
-                    .accessibilityLabel("Remove selected RSS downloader rules")
             }
-            .padding(12)
-            Divider()
+            .onChange(of: selectedName) { _, value in loadDraft(value) }
+            .onChange(of: mustContain) { _, _ in refreshSelectedMatches() }
+            .onChange(of: mustNotContain) { _, _ in refreshSelectedMatches() }
+            .onChange(of: useRegex) { _, _ in refreshSelectedMatches() }
+            .onChange(of: episodeFilter) { _, _ in refreshSelectedMatches() }
+            .onChange(of: smartFilter) { _, _ in refreshSelectedMatches() }
+            .onChange(of: ignoreDays) { _, _ in refreshSelectedMatches() }
+            .onChange(of: selectedFeeds) { _, _ in refreshSelectedMatches() }
+    }
 
+    private var ruleDialogs: some View {
+        VStack(spacing: 0) {
+            rulesToolbar
+            Divider()
             NavigationSplitView {
-                VStack(spacing: 0) {
-                    List(selection: $selectedRuleNames) {
-                        ForEach(rules.keys.sorted(), id: \.self) { name in
-                            HStack {
-                                Image(systemName: (rules[name]?["enabled"] as? Bool ?? true) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle((rules[name]?["enabled"] as? Bool ?? true) ? .green : .secondary)
-                                Text(name).lineLimit(1)
-                            }
-                            .tag(name)
-                            .onTapGesture(count: 2) { renameRule(named: name) }
-                            .contextMenu {
-                                if selectedRuleNames.count > 1, selectedRuleNames.contains(name) {
-                                    Button("Remove Selected Rules", role: .destructive) {
-                                        requestRemoval(of: selectedRuleNames)
-                                    }
-                                    Button("Clear Downloaded Episodes…") {
-                                        pendingClearDownloadHistoryRules = selectedRuleNames.sorted()
-                                    }
-                                } else {
-                                    Button("Enable/Disable") { toggleRule(name) }
-                                    Button("Rename…") { renameRule(named: name) }
-                                    Button("Clone…") { clone(name) }
-                                    Button("Remove", role: .destructive) { requestRemoval(of: [name]) }
-                                    Button("Clear Downloaded Episodes…") {
-                                        pendingClearDownloadHistoryRules = [name]
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.sidebar)
-                    .onKeyPress(KeyEquivalent("\u{F705}")) {
-                        renameSelectedRule()
-                        return .handled
-                    }
-                    .onDeleteCommand { removeSelected() }
-                    HStack {
-                        TextField("New rule name", text: $newName).textFieldStyle(.roundedBorder)
-                        Button("Add") { createRule() }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    .padding(10)
-                }
-                .navigationSplitViewColumnWidth(min: 230, ideal: 270)
+                rulesSidebar
             } detail: {
-                VStack(spacing: 0) {
-                HStack {
-                    Text(detailTitle).font(.title2.weight(.semibold))
-                    Spacer()
-                    if selectedName != nil {
-                        TextField("Rule name", text: $nameDraft)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 220)
-                            .focused($isRuleNameFieldFocused)
-                            .onSubmit(save)
-                        Button("Save") { save() }
-                            .buttonStyle(.glassProminent)
-                            .disabled(isSaving || !torrentParamsDraft.hasValidValues)
-                    }
-                    Button("Done") { dismiss() }
-                }
-                .padding(15)
-                Divider()
-                if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red).padding(8) }
-                if selectedRuleNames.count > 1 {
-                    multipleRulesForm
-                } else if rules.isEmpty {
-                    ContentUnavailableView("No RSS Rules", systemImage: "dot.radiowaves.left.and.right", description: Text("Import a rule set or create a rule in the sidebar."))
-                } else if selectedName == nil {
-                    ContentUnavailableView("No Rule Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Create or select a rule to configure automatic torrent downloads."))
-                } else {
-                    Form {
-                        Section("Matching") {
-                            Toggle("Enabled", isOn: $enabled)
-                            Toggle("Use regular expressions", isOn: $useRegex)
-                            HStack(spacing: 8) {
-                                TextField("Must contain", text: $mustContain)
-                                validationWarning(mustContainValidationError, label: "Invalid must contain expression")
-                            }
-                            HStack(spacing: 8) {
-                                TextField("Must not contain", text: $mustNotContain)
-                                validationWarning(mustNotContainValidationError, label: "Invalid must not contain expression")
-                            }
-                            HStack(spacing: 8) {
-                                TextField("Episode filter", text: $episodeFilter)
-                                validationWarning(episodeFilterValidationError, label: "Invalid episode filter")
-                            }
-                            Toggle("Smart episode filter", isOn: $smartFilter)
-                            Stepper("Ignore episodes older than \(ignoreDays) days", value: $ignoreDays, in: 0...365)
-                            HStack {
-                                Text(lastMatchDescription)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text("Priority")
-                                Stepper(value: $priority, in: Int(Int32.min)...Int(Int32.max)) {
-                                    Text("\(priority)").monospacedDigit()
-                                }
-                                    .fixedSize()
-                            }
-                            Button("Clear Downloaded Episodes…", role: .destructive) {
-                                if let selectedName { pendingClearDownloadHistoryRules = [selectedName] }
-                            }
-                            .disabled(selectedName == nil || isSaving)
-                        }
-                        Section("Feeds") {
-                            if feedURLs.isEmpty {
-                                Text("Add RSS feeds before assigning them to a rule.").foregroundStyle(.secondary)
-                            } else {
-                                ForEach(feedURLs, id: \.self) { url in
-                                    Toggle(url, isOn: Binding(
-                                        get: { selectedFeeds.contains(url) },
-                                        set: { selected in
-                                            if selected { selectedFeeds.insert(url) }
-                                            else { selectedFeeds.remove(url) }
-                                        }
-                                    ))
-                                }
-                            }
-                        }
-                        TorrentAddOptionsFields(draft: $torrentParamsDraft, store: store)
-                        Section("Current matches") {
-                            if matches.isEmpty { Text("Save the rule to check matching articles.").foregroundStyle(.secondary) }
-                            ForEach(matches, id: \.0) { feed, titles in
-                                DisclosureGroup("\(feed) (\(titles.count))") {
-                                    ForEach(titles, id: \.self) { Text($0).font(.caption) }
-                                }
-                            }
-                        }
-                    }
-                    .formStyle(.grouped)
-                }
-                }
+                rulesDetail
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 900, minHeight: 700)
-        .task { await reload() }
-        .onChange(of: selectedRuleNames) { _, names in
-            if names.count == 1 {
-                selectedName = names.first
-            } else {
-                selectedName = nil
-                if names.isEmpty {
-                    matches = []
-                    matchLoadID = UUID()
-                } else {
-                    Task { await loadMatches(names.sorted()) }
-                }
-            }
-        }
-        .onChange(of: selectedName) { _, value in loadDraft(value) }
+        .frame(minWidth: 980, maxWidth: .infinity, minHeight: 700, maxHeight: .infinity)
         .confirmationDialog(
             "Clear downloaded episodes?",
             isPresented: Binding(
@@ -254,9 +137,7 @@ struct RSSRulesView: View {
             }
             Button("Cancel", role: .cancel) { pendingClearDownloadHistoryRules = [] }
         } message: {
-            Text(pendingClearDownloadHistoryRules.count == 1
-                ? "Are you sure you want to clear downloaded episodes for ‘\(pendingClearDownloadHistoryRules[0])’?"
-                : "Are you sure you want to clear downloaded episodes for the selected rules?")
+            Text(clearHistoryConfirmationMessage)
         }
         .confirmationDialog(
             "Remove selected RSS downloader rules?",
@@ -269,9 +150,7 @@ struct RSSRulesView: View {
             Button("Remove Rules", role: .destructive) { removePendingRules() }
             Button("Cancel", role: .cancel) { pendingRemoveRuleNames = [] }
         } message: {
-            Text(pendingRemoveRuleNames.count == 1
-                ? "Are you sure you want to remove ‘\(pendingRemoveRuleNames[0])’?"
-                : "Are you sure you want to remove the selected download rules?")
+            Text(removeRulesConfirmationMessage)
         }
         .fileImporter(isPresented: $showsImport, allowedContentTypes: importRuleFileTypes) { result in
             do {
@@ -299,6 +178,189 @@ struct RSSRulesView: View {
                     catch { errorMessage = error.localizedDescription }
                 }
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private var rulesToolbar: some View {
+        HStack(spacing: 10) {
+            Text("RSS Downloader Rules").font(.headline)
+            Spacer(minLength: 12)
+            Button("Import Rules…") { showsImport = true }.buttonStyle(.glass)
+            Menu {
+                Button("JSON…") { exportRules(format: "json") }
+                if supportsLegacyRuleFiles {
+                    Button("qBittorrent .rssrules…") { exportRules(format: "legacy") }
+                        .help("Newer rule options may not be preserved in this format.")
+                }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.glass)
+            .disabled(rules.isEmpty || isSaving)
+            .help(rules.isEmpty ? "Add or import a rule before exporting." : "Choose a file format to export RSS rules")
+            Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
+                .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
+                .help("Remove selected rules")
+                .accessibilityLabel("Remove selected RSS downloader rules")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var rulesSidebar: some View {
+        VStack(spacing: 0) {
+            List(selection: $selectedRuleNames) {
+                ForEach(rules.keys.sorted(), id: \.self) { name in
+                    HStack {
+                        Image(systemName: (rules[name]?["enabled"] as? Bool ?? true) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle((rules[name]?["enabled"] as? Bool ?? true) ? .green : .secondary)
+                        Text(name).lineLimit(1)
+                    }
+                    .tag(name)
+                    .onTapGesture(count: 2) { renameRule(named: name) }
+                    .contextMenu {
+                        if selectedRuleNames.count > 1, selectedRuleNames.contains(name) {
+                            Button("Remove Selected Rules", role: .destructive) {
+                                requestRemoval(of: selectedRuleNames)
+                            }
+                            Button("Clear Downloaded Episodes…") {
+                                pendingClearDownloadHistoryRules = selectedRuleNames.sorted()
+                            }
+                        } else {
+                            Button("Enable/Disable") { toggleRule(name) }
+                            Button("Rename…") { renameRule(named: name) }
+                            Button("Clone…") { clone(name) }
+                            Button("Remove", role: .destructive) { requestRemoval(of: [name]) }
+                            Button("Clear Downloaded Episodes…") {
+                                pendingClearDownloadHistoryRules = [name]
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .onKeyPress(KeyEquivalent("\u{F705}")) {
+                renameSelectedRule()
+                return .handled
+            }
+            .onDeleteCommand { removeSelected() }
+            HStack {
+                TextField("New rule name", text: $newName).textFieldStyle(.roundedBorder)
+                Button("Add") { createRule() }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(10)
+        }
+        .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 320)
+    }
+
+    private var rulesDetail: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(detailTitle).font(.title2.weight(.semibold))
+                Spacer()
+                if selectedName != nil {
+                    TextField("Rule name", text: $nameDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        .focused($isRuleNameFieldFocused)
+                        .onSubmit(save)
+                    Button("Save") { save() }
+                        .buttonStyle(.glassProminent)
+                        .disabled(isSaving || !torrentParamsDraft.hasValidValues)
+                }
+                Button("Done") { dismiss() }
+            }
+            .padding(15)
+            Divider()
+            if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red).padding(8) }
+            if let successMessage { Text(successMessage).font(.caption).foregroundStyle(.green).padding(8) }
+            if selectedRuleNames.count > 1 {
+                multipleRulesForm
+            } else if rules.isEmpty {
+                ContentUnavailableView("No RSS Rules", systemImage: "dot.radiowaves.left.and.right", description: Text("Import a rule set or create a rule in the sidebar."))
+            } else if selectedName == nil {
+                ContentUnavailableView("No Rule Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Create or select a rule to configure automatic torrent downloads."))
+            } else {
+                selectedRuleForm
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var selectedRuleForm: some View {
+        Form {
+            matchingSection
+            feedsSection
+            TorrentAddOptionsFields(draft: $torrentParamsDraft, store: store)
+            currentMatchesSection
+        }
+        .formStyle(.grouped)
+    }
+
+    private var matchingSection: some View {
+        Section("Matching") {
+            Toggle("Enabled", isOn: $enabled)
+            Toggle("Use regular expressions", isOn: $useRegex)
+            HStack(spacing: 8) {
+                TextField("Must contain", text: $mustContain)
+                validationWarning(mustContainValidationError, label: "Invalid must contain expression")
+            }
+            HStack(spacing: 8) {
+                TextField("Must not contain", text: $mustNotContain)
+                validationWarning(mustNotContainValidationError, label: "Invalid must not contain expression")
+            }
+            HStack(spacing: 8) {
+                TextField("Episode filter", text: $episodeFilter)
+                validationWarning(episodeFilterValidationError, label: "Invalid episode filter")
+            }
+            Toggle("Smart episode filter", isOn: $smartFilter)
+            Stepper(ignoreDaysLabel, value: $ignoreDays, in: 0...365)
+            HStack {
+                Text(lastMatchDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Priority")
+                Stepper(value: $priority, in: Int(Int32.min)...Int(Int32.max)) {
+                    Text("\(priority)").monospacedDigit()
+                }
+                .fixedSize()
+            }
+            Button("Clear Downloaded Episodes…", role: .destructive) {
+                if let selectedName { pendingClearDownloadHistoryRules = [selectedName] }
+            }
+            .disabled(selectedName == nil || isSaving)
+        }
+    }
+
+    private var feedsSection: some View {
+        Section("Feeds") {
+            if feedURLs.isEmpty {
+                Text("Add RSS feeds before assigning them to a rule.").foregroundStyle(.secondary)
+            } else {
+                ForEach(feedURLs, id: \.self) { url in
+                    Toggle(url, isOn: Binding(
+                        get: { selectedFeeds.contains(url) },
+                        set: { selected in
+                            if selected { selectedFeeds.insert(url) }
+                            else { selectedFeeds.remove(url) }
+                        }
+                    ))
+                }
+            }
+        }
+    }
+
+    private var currentMatchesSection: some View {
+        Section("Current matches") {
+            if matches.isEmpty {
+                Text("No current articles match this rule.").foregroundStyle(.secondary)
+            }
+            ForEach(matches, id: \.0) { feed, titles in
+                DisclosureGroup("\(feed) (\(titles.count))") {
+                    ForEach(titles, id: \.self) { Text($0).font(.caption) }
+                }
+            }
         }
     }
 
@@ -389,8 +451,32 @@ struct RSSRulesView: View {
             let data = try await store.rssRulesData()
             guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { throw APIError.badResponse }
             rules = raw
-            let feeds = try await store.rssFeeds()
-            feedURLs = feeds.map(\.url).sorted()
+            let snapshot = try await store.rssFeedSnapshot()
+            feedURLs = snapshot.feeds.map(\.url).sorted()
+            matchCandidates = snapshot.feeds.flatMap { feed in
+                feed.articles.map { article in
+                    RSSRuleMatchCandidate(
+                        feedURL: feed.url,
+                        feedTitle: feed.title,
+                        title: article.title,
+                        date: article.dateValue
+                    )
+                }
+            }
+            if let preferencesData = try? await store.preferencesData(),
+               let preferences = try? JSONSerialization.jsonObject(with: preferencesData) as? [String: Any] {
+                let smartFilters: [String]? = {
+                    if let values = preferences["rss_smart_episode_filters"] as? [String] { return values }
+                    if let value = preferences["rss_smart_episode_filters"] as? String {
+                        return value.components(separatedBy: .newlines).filter { !$0.isEmpty }
+                    }
+                    return nil
+                }()
+                matchSettings = RSSRuleMatchSettings(
+                    smartEpisodeFilters: smartFilters ?? RSSRuleMatchSettings.qBittorrentDefaults.smartEpisodeFilters,
+                    downloadRepacks: preferences["rss_download_repack_proper_episodes"] as? Bool ?? true
+                )
+            }
             selectedRuleNames.formIntersection(Set(rules.keys))
             if selectedRuleNames.isEmpty, let firstName = rules.keys.sorted().first {
                 selectedRuleNames = [firstName]
@@ -445,22 +531,38 @@ struct RSSRulesView: View {
         let requestID = UUID()
         matchLoadID = requestID
         var mergedMatches: [String: Set<String>] = [:]
-        do {
-            for name in names {
-                let data = try await store.rssRuleMatches(name)
-                guard let result = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else { throw APIError.badResponse }
-                for (feed, titles) in result {
-                    mergedMatches[feed, default: []].formUnion(titles)
-                }
+        for name in names {
+            guard let definition = matchDefinition(for: name) else { continue }
+            let groups = RSSRuleMatcher.matchingArticles(matchCandidates, rule: definition, settings: matchSettings)
+            for group in groups {
+                mergedMatches[group.feedTitle, default: []].formUnion(group.titles)
             }
-            guard matchLoadID == requestID else { return }
-            matches = mergedMatches
-                .map { ($0.key, $0.value.sorted()) }
-                .sorted { $0.0 < $1.0 }
-        } catch {
-            guard matchLoadID == requestID else { return }
-            errorMessage = error.localizedDescription
         }
+        guard matchLoadID == requestID else { return }
+        matches = mergedMatches
+            .map { ($0.key, $0.value.sorted()) }
+            .sorted { $0.0.localizedStandardCompare($1.0) == .orderedAscending }
+    }
+
+    private func matchDefinition(for name: String) -> RSSRuleMatchDefinition? {
+        guard let rule = rules[name] else { return nil }
+        let isEditingSelectedRule = selectedRuleNames == [name] && selectedName == name
+        return RSSRuleMatchDefinition(
+            affectedFeedURLs: isEditingSelectedRule ? selectedFeeds : Set(rule["affectedFeeds"] as? [String] ?? []),
+            mustContain: isEditingSelectedRule ? mustContain : rule["mustContain"] as? String ?? "",
+            mustNotContain: isEditingSelectedRule ? mustNotContain : rule["mustNotContain"] as? String ?? "",
+            useRegex: isEditingSelectedRule ? useRegex : rule["useRegex"] as? Bool ?? false,
+            episodeFilter: isEditingSelectedRule ? episodeFilter : rule["episodeFilter"] as? String ?? "",
+            smartFilter: isEditingSelectedRule ? smartFilter : rule["smartFilter"] as? Bool ?? false,
+            ignoreDays: isEditingSelectedRule ? ignoreDays : rule["ignoreDays"] as? Int ?? 0,
+            lastMatch: rule["lastMatch"] as? String ?? "",
+            previouslyMatchedEpisodes: Set(rule["previouslyMatchedEpisodes"] as? [String] ?? [])
+        )
+    }
+
+    private func refreshSelectedMatches() {
+        guard !selectedRuleNames.isEmpty else { return }
+        Task { await loadMatches(selectedRuleNames.sorted()) }
     }
 
     private func createRule() {
@@ -625,6 +727,8 @@ struct RSSRulesView: View {
     }
 
     private func exportRules(format: String) {
+        errorMessage = nil
+        successMessage = nil
         let panel = NSSavePanel()
         if format == "legacy" {
             panel.allowedContentTypes = [legacyRuleFileType]
@@ -633,10 +737,16 @@ struct RSSRulesView: View {
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "rss-downloader-rules.json"
         }
+        panel.title = format == "legacy" ? "Export RSS Rules as .rssrules" : "Export RSS Rules as JSON"
+        panel.message = "Choose where to save the RSS downloader rules."
+        panel.prompt = "Export"
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
             Task {
-                do { try await store.exportRSSRules(format: format).write(to: destination, options: .atomic) }
+                do {
+                    try await store.exportRSSRules(format: format).write(to: destination, options: .atomic)
+                    successMessage = "Exported RSS rules to \(destination.lastPathComponent)."
+                }
                 catch { errorMessage = error.localizedDescription }
             }
         }
