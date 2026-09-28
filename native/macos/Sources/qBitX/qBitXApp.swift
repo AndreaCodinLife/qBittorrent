@@ -4,6 +4,7 @@ import SwiftUI
 struct QBitXApp: App {
     @NSApplicationDelegateAdaptor(QBitXApplicationDelegate.self) private var appDelegate
     @State private var store: TorrentStore
+    @State private var programUpdateChecker = ProgramUpdateState()
     @AppStorage("qBitX.showSpeedInMenuBar") private var showSpeedInMenuBar = false
 
     init() {
@@ -14,7 +15,7 @@ struct QBitXApp: App {
 
     var body: some Scene {
         WindowGroup("qBitX", id: "main") {
-            ContentView(store: store)
+            ContentView(store: store, programUpdateChecker: programUpdateChecker)
                 .frame(minWidth: 980, minHeight: 620)
         }
         .commands { QBitXCommands() }

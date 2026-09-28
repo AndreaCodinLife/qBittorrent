@@ -34,6 +34,8 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.notifyTorrentError") private var notifyOnTorrentError = true
     @AppStorage("qBitX.notifySearchComplete") private var notifyOnSearchComplete = true
     @AppStorage("qBitX.startMinimized") private var startMinimized = false
+    @AppStorage("qBitX.showSplashOnStartup") private var showSplashOnStartup = true
+    @AppStorage("qBitX.checkForUpdatesAutomatically") private var checkForUpdatesAutomatically = true
     @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
     @AppStorage("qBitX.confirmRemoveAllTags") private var confirmRemoveAllTags = true
     @AppStorage("qBitX.confirmRemoveTrackerFromAllTorrents") private var confirmRemoveTrackerFromAllTorrents = true
@@ -167,6 +169,14 @@ struct AppPreferencesView: View {
 
                 Section("When Starting") {
                     Toggle("Start minimized", isOn: $startMinimized)
+                    Toggle("Show splash screen on startup", isOn: $showSplashOnStartup)
+                }
+
+                Section("Updates") {
+                    Toggle("Automatically check for updates", isOn: $checkForUpdatesAutomatically)
+                    Text("qBitX checks for a published release at startup and every 24 hours while it is open.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

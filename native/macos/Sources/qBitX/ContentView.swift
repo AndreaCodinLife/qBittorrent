@@ -104,6 +104,7 @@ private struct RecursiveTorrentCandidate: Identifiable {
 
 struct ContentView: View {
     @Bindable var store: TorrentStore
+    @Bindable var programUpdateChecker: ProgramUpdateState
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
     @AppStorage("qBitX.showStatusBar") private var showStatusBar = true
     @AppStorage("qBitX.showDetailPane") private var showDetailPane = true
@@ -126,6 +127,8 @@ struct ContentView: View {
     @AppStorage("qBitX.confirmRemoveAllTags") private var confirmRemoveAllTags = true
     @AppStorage("qBitX.confirmRemoveTrackerFromAllTorrents") private var confirmRemoveTrackerFromAllTorrents = true
     @AppStorage("qBitX.startMinimized") private var startMinimized = false
+    @AppStorage("qBitX.showSplashOnStartup") private var showSplashOnStartup = true
+    @AppStorage("qBitX.checkForUpdatesAutomatically") private var checkForUpdatesAutomatically = true
     @AppStorage("qBitX.alternatingTransferRows") private var alternatingTransferRows = true
     @AppStorage("qBitX.colorTransfersByState") private var colorTransfersByState = true
     @AppStorage("qBitX.progressBarFollowsStateColor") private var progressBarFollowsStateColor = false
@@ -404,6 +407,7 @@ struct ContentView: View {
         .preferredColorScheme(appColorSchemePreference)
         .onOpenURL(perform: handleOpenURL)
         .task(id: retryID) { store.start(retrying: retryID > 0) }
+        .modifier(ProgramUpdatePresentation(checker: programUpdateChecker, automaticallyCheck: checkForUpdatesAutomatically))
         .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }
         .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") { await loadDetails() }
         .onChange(of: torrents.map(\.id)) { _, ids in
@@ -438,6 +442,13 @@ struct ContentView: View {
         .overlay {
             if interfaceLocked { lockedOverlay }
         }
+        .overlay {
+            if showSplashOnStartup && !store.hasCompletedInitialConnection {
+                startupSplash
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: store.hasCompletedInitialConnection)
         .toolbar { toolbarContent }
         .toolbarVisibility(showToolbar ? .visible : .hidden, for: .windowToolbar)
         .focusedSceneValue(\.qBitXCommandActions, QBitXCommandActions(
@@ -467,7 +478,7 @@ struct ContentView: View {
             selectRSS: { mainTab = .rss },
             showExecutionLog: { showsExecutionLog = true },
             openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
-            checkForUpdates: { openURL("https://github.com/AndreaCodinLife/qBittorrent/releases") },
+            checkForUpdates: { Task { await programUpdateChecker.check(manual: true) } },
             donate: { openURL("https://www.qbittorrent.org/donate") },
             showAbout: { showsAbout = true }
         ))
@@ -725,6 +736,27 @@ struct ContentView: View {
         .contentShape(Rectangle())
     }
 
+    private var startupSplash: some View {
+        ZStack {
+            Color.black.opacity(0.12)
+            VStack(spacing: 12) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 56, height: 56)
+                    .accessibilityHidden(true)
+                Text("qBitX")
+                    .font(.title2.weight(.semibold))
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Starting qBitX")
+            }
+            .padding(28)
+            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+    }
+
     private func unlockInterface() {
         let context = LAContext()
         var error: NSError?
@@ -929,7 +961,7 @@ struct ContentView: View {
     private var helpToolbarMenu: some View {
         Menu {
             Button("qBittorrent Documentation") { openURL("https://www.qbittorrent.org/documentation") }
-            Button("Check for Updates…") { openURL("https://github.com/AndreaCodinLife/qBittorrent/releases") }
+            Button("Check for Updates…") { Task { await programUpdateChecker.check(manual: true) } }
             Button("Donate to qBittorrent") { openURL("https://www.qbittorrent.org/donate") }
             Divider()
             Button("About qBitX…") { showsAbout = true }

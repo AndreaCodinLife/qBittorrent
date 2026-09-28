@@ -32,7 +32,8 @@ private struct PreferenceItem: Identifiable {
     var isMultiline: Bool { kind == .json || draft.contains("\n") || Self.multilineKeys.contains(id) }
     var pathSelectionKind: ServerPathSelectionKind? {
         switch id {
-        case "save_path", "temp_path", "file_log_path", "alternative_webui_path": return .directory
+        case "save_path", "temp_path", "file_log_path", "alternative_webui_path",
+             "torrent_files_backup_dir", "torrent_files_finished_backup_dir": return .directory
         case "ip_filter_path", "web_ui_https_cert_path", "web_ui_https_key_path", "python_executable_path": return .file
         default: return nil
         }
@@ -265,6 +266,11 @@ private struct PreferenceItem: Identifiable {
         case "add_trackers_url_list": return "Fetched trackers"
         case "current_interface_name": return "Selected interface name"
         case "scan_dirs": return "Watched folders"
+        case "torrent_files_backup_enabled": return "Store backup .torrent files"
+        case "torrent_files_backup_dir": return "Backup folder"
+        case "torrent_files_finished_backup_dir_enabled": return "Move backups when torrents finish"
+        case "torrent_files_finished_backup_dir": return "Finished backup folder"
+        case "remove_torrent_file_backup": return "Remove backup when removing torrent"
         default: break
         }
         let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
@@ -309,6 +315,11 @@ private struct PreferenceItem: Identifiable {
             "add_trackers_url_list": "Trackers currently returned by the configured tracker list URL.",
             "current_interface_name": "Name of the selected network interface. Choose the interface by its system name above.",
             "scan_dirs": "Automatically add .torrent files found in watched folders on the connected qBittorrent server.",
+            "torrent_files_backup_enabled": "Keep a backup copy of each added .torrent file.",
+            "torrent_files_backup_dir": "Folder on the qBittorrent server where backup .torrent files are stored.",
+            "torrent_files_finished_backup_dir_enabled": "Move a backup to another folder when its torrent finishes downloading.",
+            "torrent_files_finished_backup_dir": "Folder on the qBittorrent server for backups of completed torrents.",
+            "remove_torrent_file_backup": "Delete the stored backup when its torrent is removed.",
             "web_ui_custom_http_headers": "Custom Web UI response headers in Header: value format, one per line.",
             "web_ui_reverse_proxies_list": "Trusted reverse proxy IP addresses or subnets, separated by semicolons.",
             "scheduler_days": "Days when qBittorrent switches to the alternative speed limits.",
@@ -361,7 +372,7 @@ private struct PreferenceItem: Identifiable {
         if bittorrentPreferenceKeys.contains(key) { return "BitTorrent" }
         if key.contains("limit") || key.hasPrefix("schedule_") || key == "scheduler_enabled" || key == "scheduler_days" { return "Speed" }
         if key.contains("proxy") || key.contains("port") || key.contains("interface") || key.hasPrefix("i2p_") || key.hasPrefix("ip_filter") || key == "upnp" || key == "banned_IPs" { return "Connection" }
-        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") || key.hasPrefix("excluded_file_names") || key.hasPrefix("mail_notification_") || key.hasPrefix("autorun") || key.hasPrefix("torrent_files_backup") || ["torrent_content_layout", "torrent_stop_condition", "add_to_top_of_queue", "add_stopped_enabled", "merge_trackers", "auto_delete_mode", "use_unwanted_folder"].contains(key) { return "Downloads" }
+        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") || key.hasPrefix("excluded_file_names") || key.hasPrefix("mail_notification_") || key.hasPrefix("autorun") || key.hasPrefix("torrent_files_backup") || key.hasPrefix("torrent_files_finished_backup") || key == "remove_torrent_file_backup" || ["torrent_content_layout", "torrent_stop_condition", "add_to_top_of_queue", "add_stopped_enabled", "merge_trackers", "auto_delete_mode", "use_unwanted_folder"].contains(key) { return "Downloads" }
         return "Advanced"
     }
 
@@ -542,7 +553,11 @@ struct BackendPreferencesView: View {
                                     HStack(spacing: 6) {
                                         TextField("Value", text: $item.draft)
                                             .textFieldStyle(.roundedBorder)
-                                            .disabled(item.readOnly)
+                                            .disabled(item.readOnly
+                                                || (item.id == "torrent_files_backup_dir"
+                                                && items.first(where: { $0.id == "torrent_files_backup_enabled" })?.draft != "true")
+                                                || (item.id == "torrent_files_finished_backup_dir"
+                                                    && items.first(where: { $0.id == "torrent_files_finished_backup_dir_enabled" })?.draft != "true"))
                                             .accessibilityLabel(item.label)
                                             .accessibilityHint(item.explanation)
                                         if let kind = item.pathSelectionKind, !item.readOnly {
@@ -552,6 +567,10 @@ struct BackendPreferencesView: View {
                                                 kind: kind,
                                                 label: store.usesBundledBackend ? "Choose…" : "Browse…"
                                             )
+                                            .disabled((item.id == "torrent_files_backup_dir"
+                                                && items.first(where: { $0.id == "torrent_files_backup_enabled" })?.draft != "true")
+                                                || (item.id == "torrent_files_finished_backup_dir"
+                                                    && items.first(where: { $0.id == "torrent_files_finished_backup_dir_enabled" })?.draft != "true"))
                                             .accessibilityLabel("\(store.usesBundledBackend ? "Choose" : "Browse") \(item.label)")
                                             .accessibilityHint(store.usesBundledBackend
                                                 ? (kind == .directory ? "Choose a folder on this Mac." : "Choose a file on this Mac.")

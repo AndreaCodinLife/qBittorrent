@@ -17,6 +17,7 @@ final class TorrentStore {
     private(set) var serverAPIVersion = ""
     private(set) var connectionError: String?
     private(set) var isConnected = false
+    private(set) var hasCompletedInitialConnection = false
     private(set) var connectionName = "Local library"
     private(set) var interfaceLocale = ""
     private(set) var sessionSpeedHistory: [TransferSample] = []
@@ -69,6 +70,7 @@ final class TorrentStore {
             }
             api = connectedAPI
             isConnected = true
+            hasCompletedInitialConnection = true
             while !Task.isCancelled {
                 await refresh()
                 try await Task.sleep(for: .seconds(2))
@@ -78,6 +80,7 @@ final class TorrentStore {
         } catch {
             connectionError = error.localizedDescription
             isConnected = false
+            hasCompletedInitialConnection = true
             updateSleepInhibition()
         }
     }
