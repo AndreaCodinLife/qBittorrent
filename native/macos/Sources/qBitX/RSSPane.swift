@@ -37,9 +37,11 @@ struct RSSPane: View {
                     Spacer()
                     Button { showsAddFolder = true } label: { Image(systemName: "folder.badge.plus") }
                         .buttonStyle(.glass).help("Add RSS folder")
+                        .accessibilityLabel("Add RSS folder")
                     Button { showsAddFeed = true } label: { Image(systemName: "plus") }
                         .buttonStyle(.glass)
                         .help("Add RSS feed")
+                        .accessibilityLabel("Add RSS feed")
                 }
                 .padding(12)
                 List(selection: $selectedFeedID) {
@@ -47,6 +49,7 @@ struct RSSPane: View {
                         Section("Folders") {
                             ForEach(folders) { folder in
                                 Label(folder.title, systemImage: "folder")
+                                    .accessibilityLabel("RSS folder, \(folder.title)")
                                     .contextMenu {
                                         Button("Rename Folder…") {
                                             editingFolderPath = folder.path
@@ -67,6 +70,7 @@ struct RSSPane: View {
                         ForEach(feeds) { feed in
                             Label(feed.title, systemImage: "dot.radiowaves.left.and.right")
                                 .tag(feed.id)
+                                .accessibilityLabel("RSS feed, \(feed.title)")
                                 .contextMenu {
                                     Button("Refresh") { Task { await refresh(feed) } }
                                     Button("Mark All Read") { Task { await markRead(feed) } }
@@ -89,6 +93,7 @@ struct RSSPane: View {
                     Button { if let feed = selectedFeed { Task { await refresh(feed) } } else { Task { await reload() } } } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.glass)
                         .help("Refresh feeds")
+                        .accessibilityLabel(selectedFeed.map { "Refresh \($0.title)" } ?? "Refresh RSS feeds")
                 }
                 .padding(12)
                 Divider()
@@ -97,6 +102,7 @@ struct RSSPane: View {
                 } else if let feed = selectedFeed {
                     TextField("Filter articles…", text: $articleFilter)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Filter RSS articles")
                         .padding(10)
                     if visibleArticles.isEmpty {
                         ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("This feed has no articles."))

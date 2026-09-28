@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 
 private enum PreferenceKind { case boolean, number, text, json }
+private enum PreferencePathSelectionKind: Equatable { case file, directory }
 
 private struct PreferenceChoice: Identifiable, Hashable {
     let label: String
@@ -18,6 +19,7 @@ private struct PreferenceItem: Identifiable {
     let kind: PreferenceKind
     let sensitive: Bool
     let readOnly: Bool
+    let usesLocalBackend: Bool
     var choices: [PreferenceChoice]
     var draft: String
     let original: String
@@ -30,6 +32,14 @@ private struct PreferenceItem: Identifiable {
     }
     var secretPlaceholder: String { secretWasEdited && draft.isEmpty ? "Save blank to clear password" : "Leave blank to keep current value" }
     var isMultiline: Bool { kind == .json || draft.contains("\n") || Self.multilineKeys.contains(id) }
+    var pathSelectionKind: PreferencePathSelectionKind? {
+        guard usesLocalBackend else { return nil }
+        switch id {
+        case "save_path", "temp_path", "file_log_path", "alternative_webui_path": return .directory
+        case "ip_filter_path", "web_ui_https_cert_path", "web_ui_https_key_path", "python_executable_path": return .file
+        default: return nil
+        }
+    }
     var availableChoices: [PreferenceChoice] {
         guard !choices.contains(where: { $0.value == draft }) else { return choices }
         return [.init(label: "Current value (\(draft))", value: draft)] + choices
@@ -82,6 +92,7 @@ private struct PreferenceItem: Identifiable {
             kind: kind,
             sensitive: sensitive,
             readOnly: key.contains("api_key") || managed,
+            usesLocalBackend: bundled,
             choices: choices(for: key),
             draft: shownValue,
             original: shownValue
@@ -90,6 +101,11 @@ private struct PreferenceItem: Identifiable {
 
     private static func choices(for key: String) -> [PreferenceChoice] {
         switch key {
+        case "locale":
+            return [PreferenceChoice(label: "System Default", value: "")]
+                + supportedLocales.map { locale in
+                    PreferenceChoice(label: localeLabel(locale), value: locale)
+                }
         case "torrent_content_layout":
             return [
                 .init(label: "Original", value: "Original"),
@@ -220,6 +236,25 @@ private struct PreferenceItem: Identifiable {
         }
     }
 
+    private static let supportedLocales = [
+        "ar", "az@latin", "be", "bg", "bs", "ca", "cs", "da", "el", "en", "en_AU", "en_GB",
+        "eo", "es", "et", "eu", "fa", "fi", "fr", "gl", "he", "hi_IN", "hr", "hu", "hy", "id",
+        "is", "it", "ja", "ka", "kk", "ko", "lt", "ltg", "lv_LV", "mn_MN", "ms_MY", "nb", "ne_NP",
+        "nl", "oc", "pl", "pt_BR", "pt_PT", "ro", "ru", "sk", "sl", "sq", "sr", "sr@latin", "sv",
+        "th", "tr", "uk", "uz@Latn", "vi", "zh_CN", "zh_HK", "zh_TW"
+    ]
+
+    private static func localeLabel(_ value: String) -> String {
+        let identifier: String
+        switch value {
+        case "az@latin": identifier = "az_Latn"
+        case "sr@latin": identifier = "sr_Latn"
+        case "uz@Latn": identifier = "uz_Latn"
+        default: identifier = value
+        }
+        return Locale.current.localizedString(forIdentifier: identifier) ?? value
+    }
+
     private static let multilineKeys: Set<String> = [
         "add_trackers", "add_trackers_url_list", "banned_IPs", "bypass_auth_subnet_whitelist",
         "excluded_file_names", "rss_smart_episode_filters", "web_ui_custom_http_headers"
@@ -239,6 +274,9 @@ private struct PreferenceItem: Identifiable {
         }
         if key.contains("api_key") {
             return "Generate, copy, rotate, or delete this key. Rotating it immediately invalidates the previous key."
+        }
+        if key.hasSuffix("_path") {
+            return "Path on the qBittorrent server. For the qBitX library, choose a file or folder on this Mac; for an existing remote server, enter a path that exists on that server."
         }
         let descriptions: [String: String] = [
             "dht": "Find peers through the distributed hash table when a torrent has no reachable tracker.",
@@ -457,11 +495,19 @@ struct BackendPreferencesView: View {
                                         .accessibilityLabel(item.label)
                                         .accessibilityHint(item.explanation)
                                 } else {
-                                    TextField("Value", text: $item.draft)
-                                        .textFieldStyle(.roundedBorder)
-                                        .disabled(item.readOnly)
-                                        .accessibilityLabel(item.label)
-                                        .accessibilityHint(item.explanation)
+                                    HStack(spacing: 6) {
+                                        TextField("Value", text: $item.draft)
+                                            .textFieldStyle(.roundedBorder)
+                                            .disabled(item.readOnly)
+                                            .accessibilityLabel(item.label)
+                                            .accessibilityHint(item.explanation)
+                                        if let kind = item.pathSelectionKind {
+                                            Button("Choose…") { choosePath(for: item.id, kind: kind, currentPath: item.draft) }
+                                                .buttonStyle(.glass)
+                                                .accessibilityLabel("Choose \(item.label)")
+                                                .accessibilityHint(kind == .directory ? "Choose a folder on this Mac." : "Choose a file on this Mac.")
+                                        }
+                                    }
                                 }
                                 if item.isDirty && !item.readOnly {
                                     Button("Save") { save(item) }
@@ -539,6 +585,22 @@ struct BackendPreferencesView: View {
         guard !currentAPIKey.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(currentAPIKey, forType: .string)
+    }
+
+    private func choosePath(for itemID: String, kind: PreferencePathSelectionKind, currentPath: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = kind == .file
+        panel.canChooseDirectories = kind == .directory
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = kind == .directory
+        panel.message = kind == .directory ? "Choose a folder on the qBitX Mac." : "Choose a file on the qBitX Mac."
+        if !currentPath.isEmpty {
+            let currentURL = URL(fileURLWithPath: currentPath)
+            panel.directoryURL = kind == .directory ? currentURL : currentURL.deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, let url = panel.url,
+              let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+        items[index].draft = url.path
     }
 
     private func performAPIKeyAction(_ action: APIKeyAction) {

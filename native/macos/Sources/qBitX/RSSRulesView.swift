@@ -39,9 +39,11 @@ struct RSSRulesView: View {
                     Button("Export…", action: exportRules).buttonStyle(.glass)
                     Button { createRule() } label: { Image(systemName: "plus") }.buttonStyle(.glass)
                         .help("Add rule")
+                        .accessibilityLabel("Add RSS downloader rule")
                     Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
                         .buttonStyle(.glass).disabled(selectedName == nil)
                         .help("Remove selected rule")
+                        .accessibilityLabel("Remove selected RSS downloader rule")
                 }
                 .padding(12)
                 List(selection: $selectedName) {

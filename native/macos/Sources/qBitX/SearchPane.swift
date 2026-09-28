@@ -135,11 +135,11 @@ struct SearchPane: View {
             HStack(spacing: 10) {
                 TextField("Search torrents…", text: $query)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Search torrents")
                     .onSubmit(search)
                 Button("Search", action: search)
                     .buttonStyle(.glassProminent)
                     .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.isConnected)
-                if searching { ProgressView().controlSize(.small) }
                 if let selectedSearchTab, selectedSearchTab.status == "Running" {
                     Button("Stop") { stopSearch(selectedSearchTab.id) }.buttonStyle(.glass)
                 }
@@ -174,33 +174,47 @@ struct SearchPane: View {
             Divider()
             if !searchTabs.isEmpty {
                 ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ForEach(searchTabs) { tab in
-                            Button {
-                                selectedSearchTabID = tab.id
-                                query = tab.query
-                                selectedResultIDs = []
-                                selectedCategory = tab.category
-                                selectedPlugin = tab.plugin
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Text(tab.query).lineLimit(1)
-                                    if tab.status == "Running" { ProgressView().controlSize(.mini) }
-                                    Text("×")
-                                        .foregroundStyle(.secondary)
-                                        .onTapGesture { closeSearchTab(tab.id) }
+                    GlassEffectContainer(spacing: 6) {
+                        HStack(spacing: 6) {
+                            ForEach(searchTabs) { tab in
+                                HStack(spacing: 4) {
+                                    Button {
+                                        selectedSearchTabID = tab.id
+                                        query = tab.query
+                                        selectedResultIDs = []
+                                        selectedCategory = tab.category
+                                        selectedPlugin = tab.plugin
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Text(tab.query).lineLimit(1)
+                                            if tab.status == "Running" { ProgressView().controlSize(.mini) }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Search for \(tab.query)")
+                                    .accessibilityValue(tab.status)
+                                    .accessibilityAddTraits(selectedSearchTabID == tab.id ? .isSelected : [])
+
+                                    Button { closeSearchTab(tab.id) } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.caption2.weight(.semibold))
+                                            .frame(width: 18, height: 18)
+                                            .contentShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Close search for \(tab.query)")
+                                    .accessibilityHint(tab.status == "Running" ? "Stops this search and closes its tab." : "Closes this search tab.")
                                 }
                                 .font(.caption.weight(.medium))
-                                .padding(.horizontal, 10)
+                                .padding(.leading, 10)
+                                .padding(.trailing, 4)
                                 .padding(.vertical, 6)
                                 .glassEffect(selectedSearchTabID == tab.id ? .regular.tint(.accentColor).interactive() : .regular.interactive(), in: .capsule)
                             }
-                            .buttonStyle(.plain)
-                            .help("\(tab.query) — \(tab.status)")
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
                 }
                 Divider()
             }
@@ -220,6 +234,7 @@ struct SearchPane: View {
                         HStack(spacing: 8) {
                             TextField("Filter search results…", text: tabBinding(\.resultFilter, default: ""))
                                 .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Filter search results")
                             Picker("Search in", selection: $nameFilterMode) {
                                 ForEach(SearchNameFilterMode.allCases) { mode in Text(mode.label).tag(mode) }
                             }
@@ -234,6 +249,8 @@ struct SearchPane: View {
                             }
                             .buttonStyle(.glass)
                             .help("Search result filter options")
+                            .accessibilityLabel("Search result filter options")
+                            .accessibilityHint("Change regex matching or clear all search result filters.")
                         }
                         HStack(spacing: 7) {
                             Text("Seeds")

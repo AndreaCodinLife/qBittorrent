@@ -1200,6 +1200,7 @@ struct ContentView: View {
                 Button { showDetailInput(.addTracker, title: "Add Tracker", hint: "Tracker URL") } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
                     .help("Add tracker")
+                    .accessibilityLabel("Add tracker")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
@@ -1412,6 +1413,7 @@ struct ContentView: View {
                 Button { showDetailInput(.addPeer, title: "Add Peer", hint: "IP address:port") } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
                     .help("Add peer")
+                    .accessibilityLabel("Add peer")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
@@ -1449,6 +1451,8 @@ struct ContentView: View {
                                 }
                                 .frame(width: 150, alignment: .leading)
                                 .help(peer.countryName)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel("Country or region: \(peer.countryName)")
                                 peerValue(peer.ip, width: 120, tooltip: peer.host_name ?? peer.ip)
                                 peerValue("\(peer.port ?? 0)", width: 55)
                                 peerValue(peer.connection ?? "—", width: 100)
@@ -1502,6 +1506,7 @@ struct ContentView: View {
                 Button { showDetailInput(.addWebSeed, title: "Add HTTP Source", hint: "HTTP or HTTPS URL") } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
                     .help("Add web seed")
+                    .accessibilityLabel("Add HTTP source")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
