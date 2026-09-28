@@ -10,12 +10,33 @@ cmake -S "$repo_dir" -B "$repo_dir/build/nox" -G Ninja \
     -DQT_NO_PRIVATE_MODULE_WARNING=ON
 cmake --build "$repo_dir/build/nox" -j 8
 
-swift build -c release
+swift build -c release --product qBitX
+swift build -c release --product qBitXWidget
+
+signing_identity="${QBITX_CODE_SIGN_IDENTITY:-}"
+if [ -z "$signing_identity" ]; then
+    account_name="$(id -un)"
+    signing_identity="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' -v user_name="$account_name" '/Apple Development:/ { if (fallback == "") fallback = $2; if (index(tolower($2), tolower(user_name)) > 0) chosen = $2 } END { if (chosen != "") print chosen; else print fallback }')"
+fi
+app_group_identifier=""
+if [ -n "$signing_identity" ]; then
+    team_identifier="$(security find-certificate -c "$signing_identity" -p 2>/dev/null | openssl x509 -noout -subject -nameopt RFC2253 | sed -n 's/.*OU=\([A-Z0-9]\{10\}\).*/\1/p')"
+    if [[ ! "$team_identifier" =~ ^[A-Z0-9]{10}$ ]]; then
+        echo "Could not read the Team ID from QBITX_CODE_SIGN_IDENTITY '$signing_identity'." >&2
+        exit 1
+    fi
+    app_group_identifier="${QBITX_APP_GROUP_IDENTIFIER:-${team_identifier}.qbitx.shared}"
+    if [[ "$app_group_identifier" != "${team_identifier}."* ]]; then
+        echo "QBITX_APP_GROUP_IDENTIFIER must begin with ${team_identifier}." >&2
+        exit 1
+    fi
+fi
 
 preview_root="${TMPDIR:-/tmp}/qbitx-preview-${UID}"
 mkdir -p "$preview_root"
 staging_root="$(mktemp -d "$preview_root/package.XXXXXX")"
 app_dir="$staging_root/qBitX.app"
+app_bundle_identifier="life.andreacodin.qbitx.preview"
 mkdir -p "$app_dir/Contents/MacOS"
 cp "$package_dir/.build/release/qBitX" "$app_dir/Contents/MacOS/qBitX"
 mkdir -p "$app_dir/Contents/Resources"
@@ -108,19 +129,95 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+if [ -n "$app_group_identifier" ]; then
+    /usr/libexec/PlistBuddy -c "Add :QBitXAppGroupIdentifier string $app_group_identifier" "$app_dir/Contents/Info.plist"
+
+    widget_dir="$app_dir/Contents/PlugIns/qBitXWidget.appex"
+    mkdir -p "$widget_dir/Contents/MacOS"
+    cp "$package_dir/.build/release/qBitXWidget" "$widget_dir/Contents/MacOS/qBitXWidget"
+    cat > "$widget_dir/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>qBitXWidget</string>
+    <key>CFBundleIdentifier</key>
+    <string>${app_bundle_identifier}.widget</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>qBitXWidget</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>QBitXAppGroupIdentifier</key>
+    <string>${app_group_identifier}</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.widgetkit-extension</string>
+    </dict>
+</dict>
+</plist>
+PLIST
+
+    cat > "$staging_root/qBitX-app.entitlements" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array><string>${app_group_identifier}</string></array>
+</dict>
+</plist>
+PLIST
+    cat > "$staging_root/qBitX-widget.entitlements" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array><string>${app_group_identifier}</string></array>
+</dict>
+</plist>
+PLIST
+fi
+
 python3 "$package_dir/scripts/generate-translations.py" "$repo_dir" "$app_dir/Contents/Resources"
 
 # The workspace may be hosted in a File Provider directory, which adds Finder
 # metadata that codesign rejects on nested Qt bundles. This is a generated app
 # bundle, so clear its filesystem metadata before making a local ad-hoc signature.
 xattr -cr "$app_dir"
-codesign --force --deep --sign - --identifier life.andreacodin.qbitx.preview "$app_dir"
-codesign --verify --strict --verbose=2 "$app_dir"
+if [ -n "$app_group_identifier" ]; then
+    codesign --force --deep --sign "$signing_identity" "$helper_dir"
+    codesign --force --sign "$signing_identity" \
+        --entitlements "$staging_root/qBitX-widget.entitlements" \
+        --identifier "${app_bundle_identifier}.widget" "$widget_dir"
+    codesign --force --sign "$signing_identity" \
+        --entitlements "$staging_root/qBitX-app.entitlements" \
+        --identifier "$app_bundle_identifier" "$app_dir"
+else
+    echo "No Apple Development identity was found; packaging this preview without the WidgetKit extension." >&2
+    codesign --force --deep --sign - --identifier "$app_bundle_identifier" "$app_dir"
+fi
+codesign --verify --deep --strict --verbose=2 "$app_dir"
 
 output_app="$preview_root/qBitX.app"
 if [ -e "$output_app" ]; then
     mv "$output_app" "$preview_root/qBitX.previous.$(date +%Y%m%d-%H%M%S).app"
 fi
 mv "$app_dir" "$output_app"
+rm -f "$staging_root"/*.entitlements
 rmdir "$staging_root"
 echo "$output_app"

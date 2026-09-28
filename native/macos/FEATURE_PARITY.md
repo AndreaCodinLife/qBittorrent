@@ -48,7 +48,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 - The bundled IP-filter refresh control invokes the same empty-path then saved-path update as qBittorrent's Qt button in one backend request; remote servers lack this action in the legacy Web API. qBittorrent reports parse results in its Execution Log.
 - The IP-filter refresh endpoint was exercised against a disposable loopback qBittorrent profile; it returned HTTP 200 and preserved the enabled filter path.
 - The Transfers and Session menus toggle alternative speed limits through qBittorrent's `transfer/toggleSpeedLimitsMode` Web API action.
-- macOS-specific controls now include live menu bar and Dock speed indicators plus local idle-sleep prevention during active transfers.
+- macOS-specific controls now include a WidgetKit transfer summary, live menu bar and Dock speed indicators, and local idle-sleep prevention during active transfers.
 - Native qBitX preferences now include Qt's transfer double-click choices, zero/infinity display rules, alternating transfer rows, semantic torrent-state text colors, progress-bar tint behavior, start minimized, content dragging for local files, status-bar disk and external-IP values, remove confirmation, and quit/automatic-completion confirmations.
 - Transfer seed and peer columns now include qBittorrent's connected and swarm totals when the server reports them.
 - The free-space value and public IPv4/IPv6 addresses are read from qBittorrent's Web API; free space refreshes every 30 seconds.
@@ -63,7 +63,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 - Focused Swift tests verify deletion of an unchanged `.torrent`, preservation of a source changed after upload, and ignoring non-`.torrent` files. They passed using a scratch build path outside the File Provider workspace.
 - After adding server-side path browsing, the macOS debug build and the C++/Swift release package completed; the packaged app passed strict code-signature verification.
 - The app registers as a macOS handler for `.torrent` files and magnet links, offers the system-supported default-app request, and opens both through the normal add-options sheet.
-- The preview packager now copies the app out of the File Provider workspace, removes macOS metadata that invalidates nested Qt signatures, then ad-hoc signs and verifies the complete app bundle.
+- The preview packager now copies the app out of the File Provider workspace, removes macOS metadata that invalidates nested Qt signatures, and signs the WidgetKit extension and host app with a local Apple Development identity when available. Without one, the fallback preview omits the widget extension and uses an ad-hoc signature.
 - `git diff --check`.
 
 ## Backend API version support
@@ -74,7 +74,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 
 ## Remaining parity gate
 
-1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, file and magnet opening, default-app requests, menu bar and Dock indicators, sleep prevention, and accessibility enabled. A 1,000-row screen check reached a macOS Local Network permission prompt on its temporary app copy. The prompt was left unanswered, so the list could not finish loading for visual inspection.
+1. Exercise the packaged native app with large lists, multi-selection, active transfers, Search, RSS, file and magnet opening, default-app requests, the WidgetKit extension, menu bar and Dock indicators, sleep prevention, and accessibility enabled. A 1,000-row screen check reached a macOS Local Network permission prompt on its temporary app copy. The prompt was left unanswered, so the list could not finish loading for visual inspection.
 2. Run the preference controls in the packaged UI against bundled and remote backends, including password replacement/clearing, network interface selection, locale changes, local path panels, remote server path browsing, and read-only fetched tracker results.
 3. Confirm the older-server compatibility warning and unsupported-action error in the packaged UI; the API-level check against qBittorrent v5.2.3 (Web API 2.15.1) is complete.
 

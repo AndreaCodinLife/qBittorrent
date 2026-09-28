@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import QBitXWidgetSupport
+import WidgetKit
 
 enum TorrentStoreError: LocalizedError {
     case disconnected
@@ -28,6 +30,7 @@ final class TorrentStore {
     @ObservationIgnored private var serverStatisticsRefreshedAt: Date?
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
     @ObservationIgnored private var runTask: Task<Void, Never>?
+    @ObservationIgnored private var lastWidgetSnapshot: QBitXWidgetSnapshot?
 
     func start(retrying: Bool = false) {
         if retrying {
@@ -82,6 +85,7 @@ final class TorrentStore {
             isConnected = false
             hasCompletedInitialConnection = true
             updateSleepInhibition()
+            publishWidgetSnapshot()
         }
     }
 
@@ -312,6 +316,7 @@ final class TorrentStore {
             isConnected = true
             MacOSStatusPresentation.updateDockSpeed(transferStatus)
             updateSleepInhibition()
+            publishWidgetSnapshot()
             if sessionSpeedHistory.last.map({ now.timeIntervalSince($0.date) >= 2 }) ?? true {
                 sessionSpeedHistory.append(TransferSample(date: now, status: transferStatus))
             }
@@ -325,7 +330,38 @@ final class TorrentStore {
             connectionError = error.localizedDescription
             isConnected = false
             updateSleepInhibition()
+            publishWidgetSnapshot()
         }
+    }
+
+    private func publishWidgetSnapshot() {
+        guard let groupIdentifier = Bundle.main.object(
+            forInfoDictionaryKey: QBitXWidgetSnapshotStore.appGroupInfoKey
+        ) as? String else { return }
+
+        let now = Date.now
+        let snapshot = QBitXWidgetSnapshot(
+            sampledAt: now,
+            isConnected: isConnected,
+            totalTorrentCount: torrents.count,
+            activeTorrentCount: torrents.filter { $0.downloadRateBytes > 0 || $0.uploadRateBytes > 0 }.count,
+            downloadingCount: torrents.filter { $0.state == .downloading }.count,
+            seedingCount: torrents.filter { $0.state == .seeding }.count,
+            downloadRate: isConnected ? transferStatus.downloadRate : 0,
+            uploadRate: isConnected ? transferStatus.uploadRate : 0
+        )
+
+        let previous = lastWidgetSnapshot
+        let shouldPublish = previous == nil
+            || previous?.isConnected != snapshot.isConnected
+            || previous?.totalTorrentCount != snapshot.totalTorrentCount
+            || previous?.activeTorrentCount != snapshot.activeTorrentCount
+            || now.timeIntervalSince(previous?.sampledAt ?? .distantPast) >= 60
+        guard shouldPublish else { return }
+
+        try? QBitXWidgetSnapshotStore.save(snapshot, groupIdentifier: groupIdentifier)
+        lastWidgetSnapshot = snapshot
+        WidgetCenter.shared.reloadTimelines(ofKind: QBitXWidgetSnapshotStore.widgetKind)
     }
 
     func updateSleepInhibition() {
