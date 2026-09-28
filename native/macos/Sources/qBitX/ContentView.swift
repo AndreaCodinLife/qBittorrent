@@ -1322,8 +1322,8 @@ struct ContentView: View {
             Text("\(torrents.count) torrents")
             Text("DHT: \(store.transferStatus.dhtNodes)")
             if showFreeDiskSpace {
-                let freeSpace = store.serverStatistics?.free_space_on_disk.map {
-                    ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                let freeSpace = store.serverStatistics?.free_space_on_disk.flatMap { bytes in
+                    bytes >= 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) : nil
                 } ?? "N/A"
                 Text("Free space: \(freeSpace)")
             }
