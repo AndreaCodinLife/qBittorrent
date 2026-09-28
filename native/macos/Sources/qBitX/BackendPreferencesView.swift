@@ -425,6 +425,8 @@ struct BackendPreferencesView: View {
     @State private var errorMessage: String?
     @State private var currentAPIKey = ""
     @State private var apiKeyAction: APIKeyAction?
+    @State private var isSendingTestEmail = false
+    @State private var testEmailMessage: String?
 
     private let sections = ["Behavior", "Downloads", "Connection", "Speed", "BitTorrent", "Search", "RSS", "WebUI", "Advanced"]
 
@@ -446,6 +448,9 @@ struct BackendPreferencesView: View {
                 Divider()
                 if let errorMessage {
                     Text(errorMessage).font(.caption).foregroundStyle(.red).padding(12)
+                }
+                if let testEmailMessage {
+                    Text(testEmailMessage).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12)
                 }
                 List {
                     ForEach($items) { $item in
@@ -548,6 +553,12 @@ struct BackendPreferencesView: View {
                                         }
                                     }
                                 }
+                                if item.id == "mail_notification_enabled" {
+                                    Button("Send Test Email", action: sendTestEmail)
+                                        .buttonStyle(.glass)
+                                        .disabled(!canSendTestEmail)
+                                        .help(testEmailButtonHelp)
+                                }
                                 if item.isDirty && !item.readOnly {
                                     Button("Save") { save(item) }
                                         .buttonStyle(.glass)
@@ -582,6 +593,24 @@ struct BackendPreferencesView: View {
         } message: {
             Text(apiKeyAction?.confirmationMessage ?? "")
         }
+    }
+
+    private var canSendTestEmail: Bool {
+        store.isConnected
+            && !isSendingTestEmail
+            && items.first(where: { $0.id == "mail_notification_enabled" })?.draft == "true"
+            && !items.contains(where: { $0.id.hasPrefix("mail_notification_") && $0.isDirty })
+    }
+
+    private var testEmailButtonHelp: String {
+        if !store.isConnected { return "Connect to qBittorrent before sending a test email." }
+        if items.contains(where: { $0.id.hasPrefix("mail_notification_") && $0.isDirty }) {
+            return "Save the changed email settings before sending a test."
+        }
+        if items.first(where: { $0.id == "mail_notification_enabled" })?.draft != "true" {
+            return "Enable email notifications before sending a test."
+        }
+        return "Ask qBittorrent to send a test email using the saved email settings."
     }
 
     private func reload() async {
@@ -624,6 +653,21 @@ struct BackendPreferencesView: View {
         guard !currentAPIKey.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(currentAPIKey, forType: .string)
+    }
+
+    private func sendTestEmail() {
+        guard canSendTestEmail else { return }
+        isSendingTestEmail = true
+        testEmailMessage = nil
+        Task {
+            do {
+                try await store.sendTestEmail()
+                testEmailMessage = "qBittorrent attempted to send a test email. Check your inbox and the Execution Log for the result."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSendingTestEmail = false
+        }
     }
 
     private func performAPIKeyAction(_ action: APIKeyAction) {

@@ -122,6 +122,11 @@ final class TorrentStore {
         return try await api.defaultSavePath()
     }
 
+    func sendTestEmail() async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.sendTestEmail()
+    }
+
     func serverDirectoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.directoryContent(path: path, mode: mode)
