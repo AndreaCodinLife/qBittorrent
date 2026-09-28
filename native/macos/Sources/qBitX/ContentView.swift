@@ -605,7 +605,7 @@ struct ContentView: View {
                             }
                             if showRSSTab {
                                 RSSPane(store: store, unreadCount: $rssUnreadCount)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                                     .opacity(mainTab == .rss ? 1 : 0)
                                     .allowsHitTesting(mainTab == .rss)
                                     .accessibilityHidden(mainTab != .rss)
