@@ -61,6 +61,7 @@ struct TorrentAddOptions: Sendable {
     var downloadLimitKiB = 0
     var uploadLimitKiB = 0
     var filePriorities: [Int]?
+    var mergeTrackersByDefault = false
 
     var form: [String: String] {
         var values = [
@@ -1243,10 +1244,74 @@ struct TorrentMetadata: Decodable, Sendable {
     let info: TorrentMetadataInfo?
     let comment: String?
     let creation_date: Int64?
+    let trackers: [TorrentMetadataTracker]?
+    let webseeds: [String]?
 
     private enum CodingKeys: String, CodingKey {
         case id = "hash"
-        case infohash_v1, infohash_v2, info, comment, creation_date
+        case infohash_v1, infohash_v2, info, comment, creation_date, trackers, webseeds
+    }
+
+    static func fromMagnetURI(_ source: String) -> TorrentMetadata? {
+        guard let components = URLComponents(string: source),
+              components.scheme?.lowercased() == "magnet" else { return nil }
+        let items = components.queryItems ?? []
+        var hashV1: String?
+        var hashV2: String?
+        for exactTopic in items.filter({ $0.name == "xt" }).compactMap(\.value) {
+            let topic = exactTopic.lowercased()
+            if topic.hasPrefix("urn:btih:") {
+                hashV1 = decodeInfoHashV1(String(exactTopic.dropFirst("urn:btih:".count)))
+            } else if topic.hasPrefix("urn:btmh:") {
+                var value = String(exactTopic.dropFirst("urn:btmh:".count))
+                if value.lowercased().hasPrefix("1220") { value = String(value.dropFirst(4)) }
+                if value.count == 64, value.allSatisfy(\.isHexDigit) { hashV2 = value.lowercased() }
+            }
+        }
+        guard let id = hashV1 ?? hashV2 else { return nil }
+        let trackers = items.filter { $0.name == "tr" }.compactMap(\.value).map {
+            TorrentMetadataTracker(url: $0, tier: 0)
+        }
+        let webseeds = items.filter { $0.name == "ws" }.compactMap(\.value)
+        return TorrentMetadata(
+            id: id,
+            infohash_v1: hashV1,
+            infohash_v2: hashV2,
+            info: TorrentMetadataInfo(
+                name: items.first(where: { $0.name == "dn" })?.value,
+                files: nil,
+                length: nil,
+                piece_length: nil,
+                pieces_num: nil,
+                privateTorrent: nil
+            ),
+            comment: nil,
+            creation_date: nil,
+            trackers: trackers,
+            webseeds: webseeds
+        )
+    }
+
+    private static func decodeInfoHashV1(_ source: String) -> String? {
+        if source.count == 40, source.allSatisfy(\.isHexDigit) { return source.lowercased() }
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+        let encoded = Array(source.uppercased().filter { $0 != "=" })
+        guard encoded.count == 32 else { return nil }
+        var accumulator: UInt32 = 0
+        var bitCount = 0
+        var bytes: [UInt8] = []
+        for character in encoded {
+            guard let value = alphabet.firstIndex(of: character) else { return nil }
+            accumulator = (accumulator << 5) | UInt32(value)
+            bitCount += 5
+            if bitCount >= 8 {
+                bitCount -= 8
+                bytes.append(UInt8((accumulator >> bitCount) & 0xff))
+                accumulator &= (1 << bitCount) - 1
+            }
+        }
+        guard bytes.count == 20, bitCount == 0 else { return nil }
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     var magnetURI: String? {
@@ -1257,12 +1322,27 @@ struct TorrentMetadata: Decodable, Sendable {
             items.append(URLQueryItem(name: "xt", value: "urn:btmh:\(hash)"))
         }
         if let name = info?.name { items.append(URLQueryItem(name: "dn", value: name)) }
+        for tracker in (trackers ?? []).enumerated().sorted(by: { left, right in
+            let leftTier = left.element.tier ?? 0
+            let rightTier = right.element.tier ?? 0
+            return leftTier == rightTier ? left.offset < right.offset : leftTier < rightTier
+        }) {
+            items.append(URLQueryItem(name: "tr", value: tracker.element.url))
+        }
+        for webseed in webseeds ?? [] {
+            items.append(URLQueryItem(name: "ws", value: webseed))
+        }
         guard !items.isEmpty else { return nil }
         var components = URLComponents()
         components.scheme = "magnet"
         components.queryItems = items
         return components.string
     }
+}
+
+struct TorrentMetadataTracker: Decodable, Sendable {
+    let url: String
+    let tier: Int?
 }
 
 struct TorrentMetadataInfo: Decodable, Sendable {

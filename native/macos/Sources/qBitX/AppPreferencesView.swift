@@ -37,6 +37,7 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.showSplashOnStartup") private var showSplashOnStartup = true
     @AppStorage("qBitX.checkForUpdatesAutomatically") private var checkForUpdatesAutomatically = true
     @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
+    @AppStorage("qBitX.confirmMergeTrackers") private var confirmMergeTrackers = true
     @AppStorage("qBitX.confirmRemoveAllTags") private var confirmRemoveAllTags = true
     @AppStorage("qBitX.confirmRemoveTrackerFromAllTorrents") private var confirmRemoveTrackerFromAllTorrents = true
     @AppStorage("qBitX.recursiveDownloadEnabled") private var recursiveDownloadEnabled = true
@@ -98,6 +99,11 @@ struct AppPreferencesView: View {
                 Section("When Adding Torrents") {
                     Toggle("Show torrent addition options", isOn: $showTorrentAdditionDialog)
                     Text("When off, new torrents use the connected qBittorrent server’s default add settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Toggle("Ask before merging trackers from a duplicate torrent", isOn: $confirmMergeTrackers)
+                        .disabled(!showTorrentAdditionDialog)
+                    Text("When enabled, qBitX asks before merging trackers and web seeds into an existing torrent.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Picker("Delete local .torrent source", selection: $autoDeleteTorrentFileMode) {

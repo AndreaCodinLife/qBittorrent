@@ -183,6 +183,7 @@ final class TorrentStore {
         options.addToQueueTop = preferences["add_to_top_of_queue"] as? Bool ?? false
         options.stopCondition = preferences["torrent_stop_condition"] as? String ?? "None"
         options.contentLayout = preferences["torrent_content_layout"] as? String ?? "Original"
+        options.mergeTrackersByDefault = preferences["merge_trackers"] as? Bool ?? false
         return options
     }
 

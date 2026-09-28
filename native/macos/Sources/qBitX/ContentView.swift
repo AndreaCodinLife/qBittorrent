@@ -102,6 +102,15 @@ private struct RecursiveTorrentCandidate: Identifiable {
     var filename: String { URL(fileURLWithPath: relativePath).lastPathComponent }
 }
 
+private struct PendingDuplicateTorrent: Identifiable {
+    let id: String
+    let name: String
+    let isPrivate: Bool
+    let mergeByDefault: Bool
+    let trackers: [TorrentMetadataTracker]
+    let webSeeds: [String]
+}
+
 struct ContentView: View {
     @Bindable var store: TorrentStore
     @Bindable var programUpdateChecker: ProgramUpdateState
@@ -3076,6 +3085,7 @@ struct AddTorrentSheet: View {
     @AppStorage("qBitX.addTorrent.pathProfiles") private var pathProfilesJSON = "{}"
     @AppStorage("qBitX.addTorrent.fileFilterMode") private var fileFilterMode = "wildcards"
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
+    @AppStorage("qBitX.confirmMergeTrackers") private var confirmMergeTrackers = true
     let file: PendingTorrentFile?
     let store: TorrentStore
     let showOptions: Bool
@@ -3101,6 +3111,7 @@ struct AddTorrentSheet: View {
     @State private var downloadLimit = 0
     @State private var uploadLimit = 0
     @State private var metadata: TorrentMetadata?
+    @State private var metadataSource: String?
     @State private var filePriorities: [Int] = []
     @State private var renamedFilePaths: [String: String] = [:]
     @State private var fileFilter = ""
@@ -3112,6 +3123,8 @@ struct AddTorrentSheet: View {
     @State private var serverFreeSpace: Int64?
     @State private var didAddTorrent = false
     @State private var keepTorrentSourceFile = false
+    @State private var pendingDuplicateTorrent: PendingDuplicateTorrent?
+    @State private var isMergingDuplicate = false
 
     init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, showOptions: Bool = true, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Bool) {
         self.file = file
@@ -3124,6 +3137,11 @@ struct AddTorrentSheet: View {
     }
 
     private var files: [TorrentMetadataFile] { metadata?.info?.files ?? [] }
+    private var currentMetadata: TorrentMetadata? {
+        guard let metadata else { return nil }
+        guard file != nil || metadataSource == url.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return metadata
+    }
     private var filteredFileIndices: [Int] {
         files.indices.filter { fileFilter.isEmpty || matchesFileFilter(files[$0].path, pattern: fileFilter) }
     }
@@ -3419,9 +3437,42 @@ struct AddTorrentSheet: View {
                             } else if options.category.isEmpty {
                                 options.category = defaultCategory
                             }
-                            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
-                            if setDefaultCategory { defaultCategory = options.category }
+                            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (currentMetadata?.magnetURI ?? "")
+                            var duplicateMetadata = currentMetadata ?? TorrentMetadata.fromMagnetURI(source)
+                            if showOptions, confirmMergeTrackers, file == nil, duplicateMetadata == nil, !source.isEmpty {
+                                do {
+                                    let fetched = try await store.fetchTorrentMetadata(source: source, downloader: initialDownloader)
+                                    guard source == url.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                                        isAdding = false
+                                        return
+                                    }
+                                    metadata = fetched
+                                    metadataSource = source
+                                    filePriorities = (fetched.info?.files ?? []).map { $0.priority ?? 1 }
+                                    duplicateMetadata = fetched
+                                } catch {
+                                    // Metadata preview is optional for adding; let the server handle sources it cannot parse here.
+                                }
+                            }
+                            if showOptions, confirmMergeTrackers,
+                               let metadata = duplicateMetadata,
+                               let duplicate = matchingTorrent(for: metadata) {
+                                let duplicateIsPrivate = metadata.info?.privateTorrent == true
+                                    || ["yes", "true", "1"].contains(duplicate.column("private").lowercased())
+                                pendingDuplicateTorrent = PendingDuplicateTorrent(
+                                    id: duplicate.id,
+                                    name: duplicate.name,
+                                    isPrivate: duplicateIsPrivate,
+                                    mergeByDefault: serverDefaultAddOptions.mergeTrackersByDefault,
+                                    trackers: metadata.trackers ?? [],
+                                    webSeeds: metadata.webseeds ?? []
+                                )
+                                keepTorrentSourceFile = true
+                                isAdding = false
+                                return
+                            }
                             let torrentWasAdded = try await onAdd(source, initialDownloader, options)
+                            if setDefaultCategory { defaultCategory = options.category }
                             didAddTorrent = true
                             if torrentWasAdded, autoDeleteTorrentFileMode > 0, !keepTorrentSourceFile, let file {
                                 do { try removeLocalTorrentSource(file) }
@@ -3458,6 +3509,45 @@ struct AddTorrentSheet: View {
         }
         .padding(25)
         .frame(minWidth: showOptions ? 900 : 460, idealWidth: showOptions ? 980 : 520, minHeight: showOptions ? 690 : 370, idealHeight: showOptions ? 760 : 430)
+        .confirmationDialog("Torrent is Already Present", isPresented: Binding(
+            get: { pendingDuplicateTorrent.map { !$0.isPrivate } ?? false },
+            set: { isPresented in
+                if !isPresented, pendingDuplicateTorrent != nil, !isMergingDuplicate {
+                    finishDuplicateWithoutMerging()
+                }
+            }
+        ), titleVisibility: .visible) {
+            if pendingDuplicateTorrent?.mergeByDefault == true {
+                Button("Merge Trackers and Web Seeds") { mergeDuplicateSource() }
+                    .keyboardShortcut(.defaultAction)
+                Button("Don't Merge", role: .cancel) { finishDuplicateWithoutMerging() }
+            } else {
+                Button("Merge Trackers and Web Seeds") { mergeDuplicateSource() }
+                Button("Don't Merge", role: .cancel) { finishDuplicateWithoutMerging() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        } message: {
+            Text("‘\(pendingDuplicateTorrent?.name ?? "This torrent")’ is already in the transfer list. Merge trackers and web seeds from the new source?")
+        }
+        .alert("Torrent is Already Present", isPresented: Binding(
+            get: { pendingDuplicateTorrent?.isPrivate == true },
+            set: { isPresented in
+                if !isPresented, pendingDuplicateTorrent?.isPrivate == true {
+                    finishDuplicateWithoutMerging()
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { finishDuplicateWithoutMerging() }
+        } message: {
+            Text("Trackers cannot be merged because ‘\(pendingDuplicateTorrent?.name ?? "this torrent")’ is private.")
+        }
+        .onChange(of: url) { _, newValue in
+            guard file == nil, metadataSource != newValue.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            metadata = nil
+            metadataSource = nil
+            filePriorities = []
+            renamedFilePaths = [:]
+        }
         .task {
             await loadServerDefaults()
             if showOptions && (file != nil || !initialURL.isEmpty) { await loadMetadata() }
@@ -3470,8 +3560,74 @@ struct AddTorrentSheet: View {
         }
     }
 
+    private func matchingTorrent(for metadata: TorrentMetadata) -> Torrent? {
+        let incomingHashes = [metadata.id, metadata.infohash_v1, metadata.infohash_v2]
+            .compactMap { $0?.lowercased() }
+            .filter { !$0.isEmpty }
+        guard !incomingHashes.isEmpty else { return nil }
+        return store.torrents.first { torrent in
+            let existingHashes = [torrent.id, torrent.column("infohash_v1"), torrent.column("infohash_v2")]
+                .map { $0.lowercased() }
+                .filter { !$0.isEmpty && $0 != "—" }
+            return existingHashes.contains { incomingHashes.contains($0) }
+        }
+    }
+
+    private func finishDuplicateWithoutMerging() {
+        keepTorrentSourceFile = true
+        pendingDuplicateTorrent = nil
+        isAdding = false
+        isMergingDuplicate = false
+        dismiss()
+    }
+
+    private func mergeDuplicateSource() {
+        guard let duplicate = pendingDuplicateTorrent else { return }
+        isMergingDuplicate = true
+        isAdding = true
+        Task {
+            do {
+                let existingTrackers = Set(try await store.trackers(for: duplicate.id).map(\.url))
+                var trackersByTier: [Int: [String]] = [:]
+                for tracker in duplicate.trackers where !existingTrackers.contains(tracker.url) {
+                    trackersByTier[tracker.tier ?? 0, default: []].append(tracker.url)
+                }
+                let trackerEntries: String
+                if let lastTier = trackersByTier.keys.max() {
+                    var lines: [String] = []
+                    for tier in 0...lastTier {
+                        if tier > 0 { lines.append("") }
+                        lines.append(contentsOf: trackersByTier[tier] ?? [])
+                    }
+                    trackerEntries = lines.joined(separator: "\n")
+                } else {
+                    trackerEntries = ""
+                }
+                if !trackerEntries.isEmpty {
+                    try await store.addTrackers(hashes: [duplicate.id], entries: trackerEntries)
+                }
+
+                let existingWebSeeds = Set(try await store.webSeeds(for: duplicate.id).map(\.url))
+                for url in Set(duplicate.webSeeds).subtracting(existingWebSeeds).sorted() {
+                    try await store.addWebSeed(hash: duplicate.id, url: url)
+                }
+                await store.refresh()
+                pendingDuplicateTorrent = nil
+                isAdding = false
+                isMergingDuplicate = false
+                dismiss()
+            } catch {
+                pendingDuplicateTorrent = nil
+                isAdding = false
+                isMergingDuplicate = false
+                errorMessage = "Could not merge trackers and web seeds: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private var isReadyToAdd: Bool {
         !isLoadingDefaults
+            && !(showOptions && confirmMergeTrackers && file != nil && isLoadingMetadata)
             && !(file == nil && url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && !isAdding
             && !hasInvalidRenamedFilePaths
@@ -3586,6 +3742,7 @@ struct AddTorrentSheet: View {
 
     private func loadMetadata() async {
         guard !isLoadingMetadata else { return }
+        let requestedSource = url.trimmingCharacters(in: .whitespacesAndNewlines)
         isLoadingMetadata = true
         errorMessage = nil
         defer { isLoadingMetadata = false }
@@ -3594,21 +3751,23 @@ struct AddTorrentSheet: View {
             if let file {
                 fetched = try await store.parseTorrentMetadata(file: file.data, filename: file.name)
             } else {
-                fetched = try await store.fetchTorrentMetadata(source: url.trimmingCharacters(in: .whitespacesAndNewlines), downloader: initialDownloader)
+                fetched = try await store.fetchTorrentMetadata(source: requestedSource, downloader: initialDownloader)
+                guard requestedSource == url.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             }
             metadata = fetched
+            metadataSource = file == nil ? requestedSource : nil
             filePriorities = (fetched.info?.files ?? []).map { $0.priority ?? 1 }
         } catch { errorMessage = error.localizedDescription }
     }
 
     private func saveMetadata() {
-        guard metadata != nil else { return }
+        guard let metadata = currentMetadata else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "torrent") ?? .data]
-        panel.nameFieldStringValue = (metadata?.info?.name ?? "torrent") + ".torrent"
+        panel.nameFieldStringValue = (metadata.info?.name ?? "torrent") + ".torrent"
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
-            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
+            let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata.magnetURI ?? "")
             Task {
                 do { try await store.saveTorrentMetadata(source: source).write(to: destination, options: .atomic) }
                 catch { errorMessage = error.localizedDescription }
