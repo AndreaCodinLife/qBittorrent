@@ -70,9 +70,9 @@ final class TorrentStore {
             }
             api = connectedAPI
             isConnected = true
-            hasCompletedInitialConnection = true
             while !Task.isCancelled {
                 await refresh()
+                hasCompletedInitialConnection = true
                 try await Task.sleep(for: .seconds(2))
             }
         } catch is CancellationError {

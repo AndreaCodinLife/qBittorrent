@@ -85,23 +85,32 @@ struct ProgramUpdatePrompt {
 final class ProgramUpdateState {
     var prompt: ProgramUpdatePrompt?
     private var automaticCheckTask: Task<Void, Never>?
+    private var automaticCheckTaskID: UUID?
 
     func setAutomaticChecking(_ enabled: Bool) {
         guard enabled else {
+            automaticCheckTaskID = nil
             automaticCheckTask?.cancel()
             automaticCheckTask = nil
             return
         }
         guard automaticCheckTask == nil else { return }
 
+        let taskID = UUID()
+        automaticCheckTaskID = taskID
         automaticCheckTask = Task { @MainActor in
+            defer {
+                if automaticCheckTaskID == taskID {
+                    automaticCheckTask = nil
+                    automaticCheckTaskID = nil
+                }
+            }
             await check(manual: false)
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(24 * 60 * 60)) }
                 catch { break }
                 await check(manual: false)
             }
-            automaticCheckTask = nil
         }
     }
 
