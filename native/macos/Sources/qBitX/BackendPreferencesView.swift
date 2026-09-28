@@ -264,6 +264,7 @@ private struct PreferenceItem: Identifiable {
         case "search_enabled": return "Enable search"
         case "add_trackers_url_list": return "Fetched trackers"
         case "current_interface_name": return "Selected interface name"
+        case "scan_dirs": return "Watched folders"
         default: break
         }
         let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
@@ -307,6 +308,7 @@ private struct PreferenceItem: Identifiable {
             "rss_smart_episode_filters": "Episode patterns used by RSS automatic downloader rules.",
             "add_trackers_url_list": "Trackers currently returned by the configured tracker list URL.",
             "current_interface_name": "Name of the selected network interface. Choose the interface by its system name above.",
+            "scan_dirs": "Automatically add .torrent files found in watched folders on the connected qBittorrent server.",
             "web_ui_custom_http_headers": "Custom Web UI response headers in Header: value format, one per line.",
             "web_ui_reverse_proxies_list": "Trusted reverse proxy IP addresses or subnets, separated by semicolons.",
             "scheduler_days": "Days when qBittorrent switches to the alternative speed limits.",
@@ -512,6 +514,9 @@ struct BackendPreferencesView: View {
                                     .accessibilityHint(item.explanation)
                                     .disabled(item.id == "store_search_job_results"
                                         && items.first(where: { $0.id == "store_search_jobs" })?.draft != "true")
+                                } else if item.id == "scan_dirs" {
+                                    WatchedFoldersPreferenceEditor(json: $item.draft, store: store)
+                                        .frame(minWidth: 340, alignment: .leading)
                                 } else if item.isMultiline {
                                     TextEditor(text: $item.draft)
                                         .font(.system(.caption, design: .monospaced))
@@ -653,5 +658,139 @@ struct BackendPreferencesView: View {
             } catch { errorMessage = error.localizedDescription }
             isSaving = false
         }
+    }
+}
+
+private enum WatchedFolderDestination: String, CaseIterable, Identifiable {
+    case watchedFolder
+    case defaultLocation
+    case customLocation
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .watchedFolder: "Watched folder"
+        case .defaultLocation: "Default save location"
+        case .customLocation: "Custom location"
+        }
+    }
+}
+
+private struct WatchedFolderDraft: Identifiable, Equatable {
+    let id: UUID
+    var path: String
+    var destination: WatchedFolderDestination
+    var customSavePath: String
+
+    init(path: String = "", destination: WatchedFolderDestination = .defaultLocation, customSavePath: String = "") {
+        id = UUID()
+        self.path = path
+        self.destination = destination
+        self.customSavePath = customSavePath
+    }
+}
+
+private struct WatchedFoldersPreferenceEditor: View {
+    @Binding private var json: String
+    @State private var folders: [WatchedFolderDraft]
+    let store: TorrentStore
+
+    init(json: Binding<String>, store: TorrentStore) {
+        _json = json
+        _folders = State(initialValue: Self.decode(json.wrappedValue))
+        self.store = store
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if folders.isEmpty {
+                Text("No watched folders")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach($folders) { $folder in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                TextField("Folder containing .torrent files", text: $folder.path)
+                                    .textFieldStyle(.roundedBorder)
+                                ServerPathBrowserButton(store: store, path: $folder.path, kind: .directory)
+                                    .accessibilityLabel("Choose watched folder")
+                                Button(role: .destructive) {
+                                    folders.removeAll { $0.id == folder.id }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove watched folder")
+                            }
+                            Picker("Add torrents to", selection: $folder.destination) {
+                                ForEach(WatchedFolderDestination.allCases) { destination in
+                                    Text(destination.label).tag(destination)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            if folder.destination == .customLocation {
+                                HStack(spacing: 6) {
+                                    TextField("Custom save folder", text: $folder.customSavePath)
+                                        .textFieldStyle(.roundedBorder)
+                                    ServerPathBrowserButton(store: store, path: $folder.customSavePath, kind: .directory)
+                                        .accessibilityLabel("Choose custom save folder")
+                                }
+                            }
+                        }
+                        .padding(8)
+                        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+
+            Button {
+                folders.append(WatchedFolderDraft())
+            } label: {
+                Label("Add Watched Folder", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+        }
+        .onChange(of: folders) { _, _ in encode() }
+    }
+
+    private static func decode(_ json: String) -> [WatchedFolderDraft] {
+        guard let data = json.data(using: .utf8),
+              let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        return values.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.compactMap { path in
+            guard let value = values[path] else { return nil }
+            if let savePath = value as? String {
+                return WatchedFolderDraft(path: path, destination: .customLocation, customSavePath: savePath)
+            }
+            if let number = value as? NSNumber {
+                return WatchedFolderDraft(path: path, destination: number.intValue == 0 ? .watchedFolder : .defaultLocation)
+            }
+            return nil
+        }
+    }
+
+    private func encode() {
+        var values: [String: Any] = [:]
+        for folder in folders {
+            let watchedPath = folder.path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !watchedPath.isEmpty else { continue }
+            switch folder.destination {
+            case .watchedFolder:
+                values[watchedPath] = 0
+            case .defaultLocation:
+                values[watchedPath] = 1
+            case .customLocation:
+                let savePath = folder.customSavePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !savePath.isEmpty else { continue }
+                values[watchedPath] = savePath
+            }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]),
+              let value = String(data: data, encoding: .utf8) else { return }
+        json = value
     }
 }
