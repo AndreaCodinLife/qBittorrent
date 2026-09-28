@@ -80,7 +80,9 @@ struct RSSRulesView: View {
                     Button("Export .rssrules…") { exportRules(format: "legacy") }
                         .buttonStyle(.glass)
                         .disabled(rules.isEmpty || isSaving)
-                        .help(rules.isEmpty ? "Add or import a rule before exporting." : "Export rules in qBittorrent's legacy format")
+                        .help(rules.isEmpty
+                            ? "Add or import a rule before exporting."
+                            : "Export in qBittorrent's legacy format; newer rule options may not be preserved.")
                 }
                 Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
                     .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
