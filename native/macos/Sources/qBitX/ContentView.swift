@@ -898,6 +898,10 @@ struct ContentView: View {
             selectSearch: { selectMainTab(.search) },
             selectRSS: { selectMainTab(.rss) },
             showExecutionLog: { openExecutionLog() },
+            toggleInterfaceLock: {
+                if interfaceLocked { unlockInterface() }
+                else { interfaceLocked = true }
+            },
             openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
             checkForUpdates: { Task { await programUpdateChecker.check(manual: true) } },
             donate: { openURL("https://www.qbittorrent.org/donate") },

@@ -28,6 +28,7 @@ struct QBitXCommandActions: Equatable {
     var selectSearch: () -> Void
     var selectRSS: () -> Void
     var showExecutionLog: () -> Void
+    var toggleInterfaceLock: () -> Void
     var openDocumentation: () -> Void
     var checkForUpdates: () -> Void
     var donate: () -> Void
@@ -103,6 +104,11 @@ struct QBitXCommands: Commands {
                 .keyboardShortcut("4", modifiers: .command)
             Button("Filter Transfers…") { actions?.focusTorrentFilter() }
                 .keyboardShortcut("f", modifiers: .command)
+        }
+
+        CommandGroup(after: .toolbar) {
+            Button("Lock/Unlock Interface") { actions?.toggleInterfaceLock() }
+                .keyboardShortcut("l", modifiers: .command)
         }
 
         CommandGroup(after: .appSettings) {
