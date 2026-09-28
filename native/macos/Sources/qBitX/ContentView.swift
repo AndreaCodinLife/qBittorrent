@@ -189,6 +189,7 @@ struct ContentView: View {
     @State private var incomingTorrentURL: String?
     @State private var pendingExternalURLs: [URL] = []
     @State private var pendingExternalFiles: [PendingTorrentFile] = []
+    @State private var pendingFileImportError: String?
     @State private var isAddingExternalTorrent = false
     @State private var showsFileImporter = false
     @State private var pendingTorrentFile: PendingTorrentFile?
@@ -566,19 +567,13 @@ struct ContentView: View {
                 try await applyDetailInput(input, value: value)
             }
         }
-        .fileImporter(isPresented: $showsFileImporter, allowedContentTypes: [UTType(filenameExtension: "torrent") ?? .data]) { result in
+        .fileImporter(
+            isPresented: $showsFileImporter,
+            allowedContentTypes: [UTType(filenameExtension: "torrent") ?? .data],
+            allowsMultipleSelection: true
+        ) { result in
             do {
-                let url = try result.get()
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let file = PendingTorrentFile(name: url.lastPathComponent, data: data, sourceURL: url)
-                if showTorrentAdditionDialog {
-                    pendingTorrentFile = file
-                } else {
-                    pendingExternalFiles.append(file)
-                    presentNextExternalURLIfReady()
-                }
+                queueExternalTorrentFiles(try result.get())
             } catch { actionError = error.localizedDescription }
         }
         .confirmationDialog("Remove selected torrents?", isPresented: $showsRemoveConfirmation) {
@@ -814,6 +809,25 @@ struct ContentView: View {
         presentNextExternalURLIfReady()
     }
 
+    private func queueExternalTorrentFiles(_ urls: [URL]) {
+        var importedFiles: [PendingTorrentFile] = []
+        var failures: [String] = []
+        for url in urls {
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            do {
+                importedFiles.append(PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url), sourceURL: url))
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        pendingExternalFiles.append(contentsOf: importedFiles)
+        if !failures.isEmpty {
+            pendingFileImportError = failures.joined(separator: "\n")
+        }
+        presentNextExternalURLIfReady()
+    }
+
     private func presentNextExternalURLIfReady() {
         guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet, !isAddingExternalTorrent else { return }
         if !pendingExternalFiles.isEmpty {
@@ -851,6 +865,10 @@ struct ContentView: View {
                 addExternalTorrent(url: url.absoluteString)
             }
             return
+        }
+        if let error = pendingFileImportError {
+            pendingFileImportError = nil
+            actionError = error
         }
     }
 
@@ -3150,6 +3168,8 @@ struct PendingTorrentFile: Identifiable {
 
 private func removeLocalTorrentSource(_ file: PendingTorrentFile) throws {
     guard let url = file.sourceURL else { return }
+    let access = url.startAccessingSecurityScopedResource()
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
     try TorrentSourceFileSupport.removeIfUnchanged(at: url, matching: file.data)
 }
 
