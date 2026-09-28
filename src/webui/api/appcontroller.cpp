@@ -47,6 +47,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include "base/bittorrent/addtorrentparams.h"
 #include "base/bittorrent/session.h"
 #include "base/global.h"
 #include "base/interfaces/iapplication.h"
@@ -1287,6 +1288,73 @@ void AppController::refreshIPFilterAction()
     const Path filterFile = session->IPFilterFile();
     session->setIPFilterFile({});
     session->setIPFilterFile(filterFile);
+    setResult(QString());
+}
+
+void AppController::watchedFoldersAction()
+{
+    QJsonObject folders;
+    const auto watchedFolders = TorrentFilesWatcher::instance()->folders();
+    for (auto it = watchedFolders.cbegin(); it != watchedFolders.cend(); ++it)
+    {
+        const TorrentFilesWatcher::WatchedFolderOptions &options = it.value();
+        folders.insert(it.key().toString(), QJsonObject
+        {
+            {u"recursive"_s, options.recursive},
+            {u"add_torrent_params"_s, BitTorrent::serializeAddTorrentParams(options.addTorrentParams)}
+        });
+    }
+    setResult(folders);
+}
+
+void AppController::setWatchedFoldersAction()
+{
+    requireParams({u"json"_s});
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(params().value(u"json"_s).toUtf8(), &parseError);
+    if ((parseError.error != QJsonParseError::NoError) || !document.isObject())
+        throw APIError(APIErrorType::BadData, tr("Watched folders must be provided as a JSON object"));
+
+    QHash<Path, TorrentFilesWatcher::WatchedFolderOptions> newFolders;
+    const QJsonObject folders = document.object();
+    for (auto it = folders.constBegin(); it != folders.constEnd(); ++it)
+    {
+        if (!it.value().isObject())
+            throw APIError(APIErrorType::BadData, tr("Invalid watched folder options"));
+
+        const Path path {it.key()};
+        if (!path.isAbsolute())
+            throw APIError(APIErrorType::BadParams, tr("Watched folder paths must be absolute"));
+
+        const QJsonObject folderOptions = it.value().toObject();
+        const QJsonValue recursiveValue = folderOptions.value(u"recursive"_s);
+        const QJsonValue addTorrentParamsValue = folderOptions.value(u"add_torrent_params"_s);
+        if (!recursiveValue.isBool() || !addTorrentParamsValue.isObject())
+            throw APIError(APIErrorType::BadData, tr("Watched folder options are incomplete"));
+
+        TorrentFilesWatcher::WatchedFolderOptions options
+        {
+            .addTorrentParams = BitTorrent::parseAddTorrentParams(addTorrentParamsValue.toObject()),
+            .recursive = recursiveValue.toBool()
+        };
+        if ((!options.addTorrentParams.savePath.isEmpty() && options.addTorrentParams.savePath.isRelative())
+            || (!options.addTorrentParams.downloadPath.isEmpty() && options.addTorrentParams.downloadPath.isRelative()))
+            throw APIError(APIErrorType::BadParams, tr("Torrent save paths must be absolute"));
+
+        newFolders.insert(path, std::move(options));
+    }
+
+    TorrentFilesWatcher *const watcher = TorrentFilesWatcher::instance();
+    const auto oldFolders = watcher->folders();
+    for (auto it = newFolders.cbegin(); it != newFolders.cend(); ++it)
+        watcher->setWatchedFolder(it.key(), it.value());
+    for (auto it = oldFolders.cbegin(); it != oldFolders.cend(); ++it)
+    {
+        if (!newFolders.contains(it.key()))
+            watcher->removeWatchedFolder(it.key());
+    }
+
     setResult(QString());
 }
 

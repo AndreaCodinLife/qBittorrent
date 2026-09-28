@@ -428,6 +428,7 @@ struct BackendPreferencesView: View {
     @State private var isSendingTestEmail = false
     @State private var isRefreshingIPFilter = false
     @State private var statusMessage: String?
+    @State private var hasAdvancedWatchedFolderOptions = false
 
     private let sections = ["Behavior", "Downloads", "Connection", "Speed", "BitTorrent", "Search", "RSS", "WebUI", "Advanced"]
 
@@ -439,7 +440,7 @@ struct BackendPreferencesView: View {
         } detail: {
             VStack(spacing: 0) {
                 HStack {
-                    Text(searchText.isEmpty ? section : "Search Results").font(.title2.weight(.semibold))
+                    Text(LocalizedStringKey(searchText.isEmpty ? section : "Search Results")).font(.title2.weight(.semibold))
                     Spacer()
                     TextField("Find setting…", text: $searchText)
                         .textFieldStyle(.roundedBorder).frame(width: 180)
@@ -459,10 +460,10 @@ struct BackendPreferencesView: View {
                             && (searchText.isEmpty || item.id.localizedCaseInsensitiveContains(searchText) || item.label.localizedCaseInsensitiveContains(searchText) || item.explanation.localizedCaseInsensitiveContains(searchText)) {
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.label).font(.subheadline)
+                                    Text(LocalizedStringKey(item.label)).font(.subheadline)
                                     Text(item.id).font(.caption2).foregroundStyle(.tertiary)
-                                    Text(item.explanation).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                                    if !searchText.isEmpty { Text(item.section).font(.caption2.weight(.medium)).foregroundStyle(.tint) }
+                                    Text(LocalizedStringKey(item.explanation)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                    if !searchText.isEmpty { Text(LocalizedStringKey(item.section)).font(.caption2.weight(.medium)).foregroundStyle(.tint) }
                                 }
                                 .frame(width: 250, alignment: .leading)
                                 Spacer(minLength: 10)
@@ -503,7 +504,7 @@ struct BackendPreferencesView: View {
                                 } else if !item.choices.isEmpty && !item.readOnly {
                                     Picker("", selection: $item.draft) {
                                         ForEach(item.availableChoices) { choice in
-                                            Text(choice.label).tag(choice.value)
+                                            Text(LocalizedStringKey(choice.label)).tag(choice.value)
                                         }
                                     }
                                     .labelsHidden()
@@ -521,7 +522,11 @@ struct BackendPreferencesView: View {
                                     .disabled(item.id == "store_search_job_results"
                                         && items.first(where: { $0.id == "store_search_jobs" })?.draft != "true")
                                 } else if item.id == "scan_dirs" {
-                                    WatchedFoldersPreferenceEditor(json: $item.draft, store: store)
+                                    WatchedFoldersPreferenceEditor(
+                                        json: $item.draft,
+                                        store: store,
+                                        advancedOptions: hasAdvancedWatchedFolderOptions
+                                    )
                                         .frame(minWidth: 340, alignment: .leading)
                                 } else if item.isMultiline {
                                     TextEditor(text: $item.draft)
@@ -649,6 +654,18 @@ struct BackendPreferencesView: View {
             var loadedItems = values.map { PreferenceItem.make(key: $0.key, value: $0.value, bundled: store.usesBundledBackend) }
                 .sorted { $0.id < $1.id }
 
+            hasAdvancedWatchedFolderOptions = false
+            if let watchedFoldersData = try? await store.watchedFoldersData(),
+               let watchedFolders = try? JSONSerialization.jsonObject(with: watchedFoldersData) as? [String: Any],
+               let scanDirectoriesIndex = loadedItems.firstIndex(where: { $0.id == "scan_dirs" }) {
+                loadedItems[scanDirectoriesIndex] = PreferenceItem.make(
+                    key: "scan_dirs",
+                    value: watchedFolders,
+                    bundled: true
+                )
+                hasAdvancedWatchedFolderOptions = true
+            }
+
             if let interfaces = try? await store.networkInterfaces(),
                let index = loadedItems.firstIndex(where: { $0.id == "current_network_interface" }) {
                 var choices = [PreferenceChoice(label: "Any interface", value: "")]
@@ -740,144 +757,14 @@ struct BackendPreferencesView: View {
         isSaving = true
         Task {
             do {
-                try await store.setPreference(key: item.id, jsonValue: item.encodedValue())
+                if item.id == "scan_dirs", hasAdvancedWatchedFolderOptions {
+                    try await store.setWatchedFolders(json: item.draft)
+                } else {
+                    try await store.setPreference(key: item.id, jsonValue: item.encodedValue())
+                }
                 await reload()
             } catch { errorMessage = error.localizedDescription }
             isSaving = false
         }
-    }
-}
-
-private enum WatchedFolderDestination: String, CaseIterable, Identifiable {
-    case watchedFolder
-    case defaultLocation
-    case customLocation
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .watchedFolder: "Watched folder"
-        case .defaultLocation: "Default save location"
-        case .customLocation: "Custom location"
-        }
-    }
-}
-
-private struct WatchedFolderDraft: Identifiable, Equatable {
-    let id: UUID
-    var path: String
-    var destination: WatchedFolderDestination
-    var customSavePath: String
-
-    init(path: String = "", destination: WatchedFolderDestination = .defaultLocation, customSavePath: String = "") {
-        id = UUID()
-        self.path = path
-        self.destination = destination
-        self.customSavePath = customSavePath
-    }
-}
-
-private struct WatchedFoldersPreferenceEditor: View {
-    @Binding private var json: String
-    @State private var folders: [WatchedFolderDraft]
-    let store: TorrentStore
-
-    init(json: Binding<String>, store: TorrentStore) {
-        _json = json
-        _folders = State(initialValue: Self.decode(json.wrappedValue))
-        self.store = store
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if folders.isEmpty {
-                Text("No watched folders")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach($folders) { $folder in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                TextField("Folder containing .torrent files", text: $folder.path)
-                                    .textFieldStyle(.roundedBorder)
-                                ServerPathBrowserButton(store: store, path: $folder.path, kind: .directory)
-                                    .accessibilityLabel("Choose watched folder")
-                                Button(role: .destructive) {
-                                    folders.removeAll { $0.id == folder.id }
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .buttonStyle(.borderless)
-                                .help("Remove watched folder")
-                            }
-                            Picker("Add torrents to", selection: $folder.destination) {
-                                ForEach(WatchedFolderDestination.allCases) { destination in
-                                    Text(destination.label).tag(destination)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            if folder.destination == .customLocation {
-                                HStack(spacing: 6) {
-                                    TextField("Custom save folder", text: $folder.customSavePath)
-                                        .textFieldStyle(.roundedBorder)
-                                    ServerPathBrowserButton(store: store, path: $folder.customSavePath, kind: .directory)
-                                        .accessibilityLabel("Choose custom save folder")
-                                }
-                            }
-                        }
-                        .padding(8)
-                        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                }
-            }
-            .frame(maxHeight: 220)
-
-            Button {
-                folders.append(WatchedFolderDraft())
-            } label: {
-                Label("Add Watched Folder", systemImage: "plus")
-            }
-            .buttonStyle(.borderless)
-        }
-        .onChange(of: folders) { _, _ in encode() }
-    }
-
-    private static func decode(_ json: String) -> [WatchedFolderDraft] {
-        guard let data = json.data(using: .utf8),
-              let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
-        return values.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.compactMap { path in
-            guard let value = values[path] else { return nil }
-            if let savePath = value as? String {
-                return WatchedFolderDraft(path: path, destination: .customLocation, customSavePath: savePath)
-            }
-            if let number = value as? NSNumber {
-                return WatchedFolderDraft(path: path, destination: number.intValue == 0 ? .watchedFolder : .defaultLocation)
-            }
-            return nil
-        }
-    }
-
-    private func encode() {
-        var values: [String: Any] = [:]
-        for folder in folders {
-            let watchedPath = folder.path.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !watchedPath.isEmpty else { continue }
-            switch folder.destination {
-            case .watchedFolder:
-                values[watchedPath] = 0
-            case .defaultLocation:
-                values[watchedPath] = 1
-            case .customLocation:
-                let savePath = folder.customSavePath.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !savePath.isEmpty else { continue }
-                values[watchedPath] = savePath
-            }
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]),
-              let value = String(data: data, encoding: .utf8) else { return }
-        json = value
     }
 }

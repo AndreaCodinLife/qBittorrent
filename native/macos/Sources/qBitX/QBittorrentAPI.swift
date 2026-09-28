@@ -200,6 +200,14 @@ actor QBittorrentAPI {
         _ = try await request("app/refreshIPFilter", method: "POST")
     }
 
+    func watchedFoldersData() async throws -> Data {
+        try await request("app/watchedFolders")
+    }
+
+    func setWatchedFolders(json: String) async throws {
+        _ = try await request("app/setWatchedFolders", method: "POST", form: ["json": json])
+    }
+
     func directoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
         let data = try await request("app/getDirectoryContent", query: [
             "dirPath": path,

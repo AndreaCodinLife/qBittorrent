@@ -249,7 +249,7 @@ struct SearchPane: View {
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityLabel("Filter search results")
                             Picker("Search in", selection: $nameFilterMode) {
-                                ForEach(SearchNameFilterMode.allCases) { mode in Text(mode.label).tag(mode) }
+                                ForEach(SearchNameFilterMode.allCases) { mode in Text(LocalizedStringKey(mode.label)).tag(mode) }
                             }
                             .frame(width: 170)
                             .help("Choose whether the original search query filters torrent names.")

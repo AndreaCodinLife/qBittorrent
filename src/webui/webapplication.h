@@ -157,6 +157,8 @@ private:
         {{u"app"_s, u"rotateAPIKey"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"refreshIPFilter"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"sendTestEmail"_s}, Http::HEADER_REQUEST_METHOD_POST},
+        {{u"app"_s, u"setWatchedFolders"_s}, Http::HEADER_REQUEST_METHOD_POST},
+        {{u"app"_s, u"watchedFolders"_s}, Http::HEADER_REQUEST_METHOD_GET},
         {{u"app"_s, u"setCookies"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"setPreferences"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"shutdown"_s}, Http::HEADER_REQUEST_METHOD_POST},

@@ -18,6 +18,7 @@ final class TorrentStore {
     private(set) var connectionError: String?
     private(set) var isConnected = false
     private(set) var connectionName = "Local library"
+    private(set) var interfaceLocale = ""
     private(set) var sessionSpeedHistory: [TransferSample] = []
 
     private let backend = BundledBackend()
@@ -41,6 +42,7 @@ final class TorrentStore {
         isConnected = false
         serverVersion = ""
         serverAPIVersion = ""
+        interfaceLocale = ""
         sessionSpeedHistory = []
         trackerSummaryRefreshedAt = nil
         serverStatistics = nil
@@ -61,6 +63,10 @@ final class TorrentStore {
             }
             serverVersion = try await connectedAPI.verify()
             serverAPIVersion = (try? await connectedAPI.webAPIVersion()).flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+            if let data = try? await connectedAPI.preferencesData(),
+               let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                interfaceLocale = values["locale"] as? String ?? ""
+            }
             api = connectedAPI
             isConnected = true
             while !Task.isCancelled {
@@ -130,6 +136,16 @@ final class TorrentStore {
     func refreshIPFilter() async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.refreshIPFilter()
+    }
+
+    func watchedFoldersData() async throws -> Data {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.watchedFoldersData()
+    }
+
+    func setWatchedFolders(json: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.setWatchedFolders(json: json)
     }
 
     func serverDirectoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
@@ -252,6 +268,11 @@ final class TorrentStore {
     func setPreference(key: String, jsonValue: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.setPreference(key: key, jsonValue: jsonValue)
+        if key == "locale",
+           let data = jsonValue.data(using: .utf8),
+           let locale = try? JSONDecoder().decode(String.self, from: data) {
+            interfaceLocale = locale
+        }
     }
 
     func refresh() async {

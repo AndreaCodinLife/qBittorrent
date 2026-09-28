@@ -69,12 +69,12 @@ struct AppPreferencesView: View {
                 Section("Transfer List") {
                     Picker("Double-click a downloading torrent", selection: $downloadingAction) {
                         ForEach(TorrentDoubleClickAction.allCases) { action in
-                            Text(action.title).tag(action.rawValue)
+                            Text(LocalizedStringKey(action.title)).tag(action.rawValue)
                         }
                     }
                     Picker("Double-click a completed torrent", selection: $completedAction) {
                         ForEach(TorrentDoubleClickAction.allCases) { action in
-                            Text(action.title).tag(action.rawValue)
+                            Text(LocalizedStringKey(action.title)).tag(action.rawValue)
                         }
                     }
                     Toggle("Hide zero and infinity values", isOn: $hideZeroValues)

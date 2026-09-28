@@ -40,7 +40,7 @@ struct ConnectionSettingsView: View {
 
                 Picker("Sign in with", selection: $authenticationMode) {
                     ForEach(RemoteAuthenticationMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                        Text(LocalizedStringKey(mode.rawValue)).tag(mode)
                     }
                 }
 

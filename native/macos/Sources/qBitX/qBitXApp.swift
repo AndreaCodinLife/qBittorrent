@@ -22,6 +22,7 @@ struct QBitXApp: App {
 
         MenuBarExtra(isInserted: $showSpeedInMenuBar) {
             MenuBarSpeedView(store: store)
+                .environment(\.locale, store.interfaceLocale.isEmpty ? .current : Locale(identifier: store.interfaceLocale))
         } label: {
             Label("qBitX", systemImage: "arrow.down.arrow.up.circle")
         }

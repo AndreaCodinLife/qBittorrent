@@ -400,6 +400,7 @@ struct ContentView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .environment(\.locale, store.interfaceLocale.isEmpty ? .current : Locale(identifier: store.interfaceLocale))
         .preferredColorScheme(appColorSchemePreference)
         .onOpenURL(perform: handleOpenURL)
         .task(id: retryID) { store.start(retrying: retryID > 0) }
@@ -705,7 +706,7 @@ struct ContentView: View {
     }
 
     private func toolbarLabel(_ title: String, image: String) -> some View {
-        Label(title, systemImage: image).labelStyle(ToolbarLabelStyle(style: toolbarStyle))
+        Label(LocalizedStringKey(title), systemImage: image).labelStyle(ToolbarLabelStyle(style: toolbarStyle))
     }
 
     private var lockedOverlay: some View {
@@ -896,7 +897,7 @@ struct ContentView: View {
             toolbarStyle = style
         } label: {
             if toolbarStyle == style { Label(title, systemImage: "checkmark") }
-            else { Text(title) }
+            else { Text(LocalizedStringKey(title)) }
         }
     }
 
@@ -1185,11 +1186,20 @@ struct ContentView: View {
                 HStack(spacing: 6) {
                     ForEach(MainTab.allCases) { tab in
                         Button { mainTab = tab } label: {
-                            Text(tab == .transfers ? "Transfers (\(torrents.count))" : tab.rawValue)
-                                .font(.subheadline.weight(.medium))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 7)
-                                .glassEffect(mainTab == tab ? .regular.tint(.accentColor).interactive() : .regular.interactive(), in: .capsule)
+                            Group {
+                                if tab == .transfers {
+                                    HStack(spacing: 0) {
+                                        Text("Transfers")
+                                        Text(" (\(torrents.count))")
+                                    }
+                                } else {
+                                    Text(LocalizedStringKey(tab.rawValue))
+                                }
+                            }
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .glassEffect(mainTab == tab ? .regular.tint(.accentColor).interactive() : .regular.interactive(), in: .capsule)
                         }
                         .buttonStyle(.plain)
                     }
@@ -1203,12 +1213,15 @@ struct ContentView: View {
                     .focused($torrentFilterFocused)
                 Menu {
                     ForEach(TorrentSort.allCases) { field in
-                        Button(field.title) { sortField = field }
+                        Button(LocalizedStringKey(field.title)) { sortField = field }
                     }
                     Divider()
                     Toggle("Descending", isOn: $sortDescending)
                 } label: {
-                    Text("Sort: \(sortField.title)")
+                    HStack(spacing: 4) {
+                        Text("Sort:")
+                        Text(LocalizedStringKey(sortField.title))
+                    }
                 }
                 .font(.caption)
             }
@@ -1333,7 +1346,7 @@ struct ContentView: View {
                 HStack(spacing: 5) {
                     ForEach(DetailTab.allCases) { tab in
                         Button { detailTab = tab } label: {
-                            Text(tab.rawValue)
+                            Text(LocalizedStringKey(tab.rawValue))
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 11)
                                 .padding(.vertical, 6)
@@ -1855,7 +1868,7 @@ struct ContentView: View {
     }
 
     private func peerColumnHeader(_ title: String, width: CGFloat) -> some View {
-        Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        Text(LocalizedStringKey(title)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             .frame(width: width, alignment: .leading)
     }
 
@@ -2318,9 +2331,9 @@ struct ContentView: View {
             downloadCompletionAction = action
         } label: {
             if downloadCompletionAction == action {
-                Label(title, systemImage: "checkmark")
+                Label(LocalizedStringKey(title), systemImage: "checkmark")
             } else {
-                Text(title)
+                Text(LocalizedStringKey(title))
             }
         }
     }
@@ -2939,7 +2952,7 @@ private struct ValueSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.title2.weight(.semibold))
+            Text(LocalizedStringKey(title)).font(.title2.weight(.semibold))
             HStack {
                 TextField(hint, text: $value).textFieldStyle(.roundedBorder)
                 if let pathStore {

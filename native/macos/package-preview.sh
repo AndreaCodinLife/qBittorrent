@@ -108,6 +108,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+python3 "$package_dir/scripts/generate-translations.py" "$repo_dir" "$app_dir/Contents/Resources"
+
 # The workspace may be hosted in a File Provider directory, which adds Finder
 # metadata that codesign rejects on nested Qt bundles. This is a generated app
 # bundle, so clear its filesystem metadata before making a local ad-hoc signature.
