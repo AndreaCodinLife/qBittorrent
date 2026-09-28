@@ -2,6 +2,59 @@ import AppKit
 import RSSArticleSupport
 import SwiftUI
 
+private struct RSSImageLoadResult: Sendable {
+    let url: URL
+    let data: Data?
+}
+
+private actor RSSRemoteImageLoader {
+    static let shared = RSSRemoteImageLoader()
+
+    private let session: URLSession
+
+    private init() {
+        let configuration = URLSessionConfiguration.default
+        configuration.requestCachePolicy = .returnCacheDataElseLoad
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        configuration.httpMaximumConnectionsPerHost = 4
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = URLCache(
+            memoryCapacity: 10 * 1024 * 1024,
+            diskCapacity: 50 * 1024 * 1024,
+            diskPath: "qBitX-RSS"
+        )
+        session = URLSession(configuration: configuration)
+    }
+
+    func load(_ url: URL) async -> Data? {
+        do {
+            var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 15)
+            request.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+            let (responseBytes, response) = try await session.bytes(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode),
+                  let mimeType = httpResponse.mimeType?.lowercased(),
+                  mimeType.hasPrefix("image/"),
+                  mimeType != "image/svg+xml",
+                  response.expectedContentLength <= 20 * 1024 * 1024
+            else { return nil }
+
+            var data = Data()
+            for try await byte in responseBytes {
+                guard !Task.isCancelled else { return nil }
+                data.append(byte)
+                guard data.count <= 20 * 1024 * 1024 else { return nil }
+            }
+            return data
+        } catch {
+            return nil
+        }
+    }
+}
+
 struct RSSArticlePreview: View {
     let article: RSSArticle?
     let onOpenURL: (URL) -> Void
@@ -16,23 +69,6 @@ struct RSSArticlePreview: View {
     private var imageLoadKey: String {
         previewContent.imageURLs.map(\.absoluteString).joined(separator: "\u{0}")
     }
-
-    private static let imageSession: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        configuration.requestCachePolicy = .returnCacheDataElseLoad
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 30
-        configuration.httpMaximumConnectionsPerHost = 4
-        configuration.httpShouldSetCookies = false
-        configuration.httpCookieStorage = nil
-        configuration.urlCredentialStorage = nil
-        configuration.urlCache = URLCache(
-            memoryCapacity: 10 * 1024 * 1024,
-            diskCapacity: 50 * 1024 * 1024,
-            diskPath: "qBitX-RSS"
-        )
-        return URLSession(configuration: configuration)
-    }()
 
     var body: some View {
         Group {
@@ -96,45 +132,27 @@ struct RSSArticlePreview: View {
         loadedImages = loadedImages.filter { currentURLs.contains($0.key) }
         failedImageURLs.formIntersection(currentURLs)
 
-        for url in urls where loadedImages[url] == nil && !failedImageURLs.contains(url) {
-            guard !Task.isCancelled else { return }
-            do {
-                var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 15)
-                request.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-                let (responseBytes, response) = try await Self.imageSession.bytes(for: request)
-                guard !Task.isCancelled,
-                      let httpResponse = response as? HTTPURLResponse,
-                      (200..<300).contains(httpResponse.statusCode),
-                      let mimeType = httpResponse.mimeType?.lowercased(),
-                      mimeType.hasPrefix("image/"),
-                      mimeType != "image/svg+xml",
-                      response.expectedContentLength <= 20 * 1024 * 1024
-                else {
-                    failedImageURLs.insert(url)
-                    continue
+        let urlsToLoad = urls.filter { loadedImages[$0] == nil && !failedImageURLs.contains($0) }
+        await withTaskGroup(of: RSSImageLoadResult.self) { group in
+            for url in urlsToLoad {
+                group.addTask {
+                    RSSImageLoadResult(url: url, data: await RSSRemoteImageLoader.shared.load(url))
                 }
-                var data = Data()
-                var imageTooLarge = false
-                for try await byte in responseBytes {
-                    guard !Task.isCancelled else { return }
-                    data.append(byte)
-                    if data.count > 20 * 1024 * 1024 {
-                        imageTooLarge = true
-                        break
-                    }
+            }
+            for await result in group {
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    return
                 }
-                guard !imageTooLarge,
-                      !Task.isCancelled,
+                guard let data = result.data,
                       let image = NSImage(data: data),
                       image.size.width > 0,
                       image.size.height > 0
                 else {
-                    failedImageURLs.insert(url)
+                    failedImageURLs.insert(result.url)
                     continue
                 }
-                loadedImages[url] = image
-            } catch {
-                if !Task.isCancelled { failedImageURLs.insert(url) }
+                loadedImages[result.url] = image
             }
         }
     }
