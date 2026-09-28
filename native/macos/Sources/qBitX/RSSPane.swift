@@ -160,7 +160,15 @@ struct RSSPane: View {
             .frame(minWidth: 350)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: store.isConnected) { if store.isConnected { await reload() } }
+        .task(id: store.isConnected) {
+            guard store.isConnected else { return }
+            await reload()
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { return }
+                await reload()
+            }
+        }
         .confirmationDialog("Remove this RSS feed?", isPresented: $showsRemoveFeed) {
             Button("Remove Feed", role: .destructive) {
                 guard let feed = selectedFeed else { return }
