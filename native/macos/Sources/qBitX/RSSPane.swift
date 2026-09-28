@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import QBitXThemeSupport
 import TorrentLinkInput
 
@@ -17,6 +19,11 @@ private struct RSSNavigationNode: Identifiable {
     let unreadCount: Int
     let isLoading: Bool
     let children: [RSSNavigationNode]?
+
+    var folderPath: String? {
+        guard case let .folder(path) = selection else { return nil }
+        return path
+    }
 }
 
 private func rssParentPath(_ path: String) -> String {
@@ -33,6 +40,7 @@ struct RSSPane: View {
     let store: TorrentStore
     @Binding var unreadCount: Int
     @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
+    @AppStorage("qBitX.rssExpandedFolders") private var rssExpandedFoldersJSON = "[]"
     @Environment(\.colorScheme) private var colorScheme
     @State private var feeds: [RSSFeed] = []
     @State private var rssProcessingEnabled: Bool?
@@ -166,29 +174,13 @@ struct RSSPane: View {
                                 .tag(RSSPaneSelection.unreadArticles)
                                 .contextMenu { rssAggregateContextMenu(.unreadArticles) }
                         }
-                        Section("Subscriptions") {
-                            OutlineGroup(navigationNodes, children: \.children) { node in
-                                Label {
-                                    HStack {
-                                        Text(node.title).lineLimit(1)
-                                        Spacer(minLength: 4)
-                                        if node.unreadCount > 0 {
-                                            Text("\(node.unreadCount)")
-                                                .font(.caption.monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                } icon: {
-                                    if node.isLoading {
-                                        ProgressView().controlSize(.small)
-                                    } else {
-                                        Image(systemName: node.symbol)
-                                    }
+                        Section {
+                            navigationRows(navigationNodes)
+                        } header: {
+                            Text("Subscriptions")
+                                .onDrop(of: [UTType.plainText], isTargeted: nil) {
+                                    receiveRSSDrop($0, into: "")
                                 }
-                                .tag(node.selection)
-                                .accessibilityLabel("RSS \(node.symbol == "folder" ? "folder" : "feed"), \(node.title), \(node.unreadCount) unread")
-                                .contextMenu { rssNodeContextMenu(node) }
-                            }
                         }
                     }
                     .listStyle(.sidebar)
@@ -502,6 +494,153 @@ struct RSSPane: View {
         .sheet(isPresented: $showsRules) { RSSRulesView(store: store) }
     }
 
+    private var expandedRSSFolderPaths: Set<String> {
+        guard let data = rssExpandedFoldersJSON.data(using: .utf8),
+              let paths = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return Set(paths)
+    }
+
+    private func saveExpandedRSSFolderPaths(_ paths: Set<String>) {
+        guard let data = try? JSONEncoder().encode(paths.sorted()),
+              let value = String(data: data, encoding: .utf8)
+        else { return }
+        rssExpandedFoldersJSON = value
+    }
+
+    private func expansionBinding(for path: String) -> Binding<Bool> {
+        Binding {
+            expandedRSSFolderPaths.contains(path)
+        } set: { isExpanded in
+            var paths = expandedRSSFolderPaths
+            if isExpanded {
+                paths.insert(path)
+            } else {
+                paths = paths.filter { $0 != path && !$0.hasPrefix(path + "\\") }
+            }
+            saveExpandedRSSFolderPaths(paths)
+        }
+    }
+
+    @ViewBuilder
+    private func navigationRows(_ nodes: [RSSNavigationNode]) -> some View {
+        ForEach(nodes) { node in
+            if let path = node.folderPath, let children = node.children {
+                DisclosureGroup(isExpanded: expansionBinding(for: path)) {
+                    AnyView(navigationRows(children))
+                } label: {
+                    navigationLabel(node)
+                }
+                .contextMenu { rssNodeContextMenu(node) }
+            } else {
+                navigationLabel(node)
+                    .contextMenu { rssNodeContextMenu(node) }
+            }
+        }
+    }
+
+    private func navigationLabel(_ node: RSSNavigationNode) -> some View {
+        let itemType = node.folderPath == nil ? "feed" : "folder"
+        return Label {
+            HStack {
+                Text(node.title).lineLimit(1)
+                Spacer(minLength: 4)
+                if node.unreadCount > 0 {
+                    Text("\(node.unreadCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } icon: {
+            if node.isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: node.symbol)
+            }
+        }
+        .tag(node.selection)
+        .accessibilityLabel("RSS \(itemType), \(node.title), \(node.unreadCount) unread")
+        .accessibilityHint("Drag to move this \(itemType) into a folder or the subscriptions root.")
+        .onDrag { rssDragProvider(for: node.selection) }
+        .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
+            guard let folderPath = node.folderPath else { return false }
+            return receiveRSSDrop(providers, into: folderPath)
+        }
+    }
+
+    private func rssDragProvider(for selection: RSSPaneSelection) -> NSItemProvider {
+        let paths = movableRSSPaths(startingWith: selection)
+        let data = (try? JSONEncoder().encode(paths)) ?? Data("[]".utf8)
+        return NSItemProvider(object: (String(data: data, encoding: .utf8) ?? "[]") as NSString)
+    }
+
+    private func movableRSSPaths(startingWith selection: RSSPaneSelection) -> [String] {
+        let selections = selectedFeedItems.contains(selection) ? selectedFeedItems : [selection]
+        guard !selections.contains(.allArticles), !selections.contains(.unreadArticles) else { return [] }
+        let paths = selections.compactMap { selected -> String? in
+            switch selected {
+            case let .folder(path), let .feed(path): path
+            case .allArticles, .unreadArticles: nil
+            }
+        }
+        return paths
+            .filter { path in !paths.contains { other in other != path && path.hasPrefix(other + "\\") } }
+            .sorted {
+                let leftDepth = $0.filter { $0 == "\\" }.count
+                let rightDepth = $1.filter { $0 == "\\" }.count
+                return leftDepth == rightDepth ? $0 < $1 : leftDepth < rightDepth
+            }
+    }
+
+    private func receiveRSSDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let encodedPaths = object as? String,
+                  let data = encodedPaths.data(using: .utf8),
+                  let paths = try? JSONDecoder().decode([String].self, from: data),
+                  !paths.isEmpty
+            else { return }
+            Task { @MainActor in
+                await moveRSSItems(paths, into: destinationFolder)
+            }
+        }
+        return true
+    }
+
+    private func moveRSSItems(_ paths: [String], into destinationFolder: String) async {
+        guard destinationFolder.isEmpty || folders.contains(where: { $0.path == destinationFolder }) else { return }
+        let folderPaths = Set(folders.map(\.path))
+        let validSourcePaths = folderPaths.union(feeds.map(\.path))
+        var movedSelections: [RSSPaneSelection] = []
+        do {
+            for sourcePath in paths {
+                guard validSourcePaths.contains(sourcePath) else { continue }
+                if sourcePath == destinationFolder
+                    || (folderPaths.contains(sourcePath) && destinationFolder.hasPrefix(sourcePath + "\\")) {
+                    continue
+                }
+                let name = sourcePath.components(separatedBy: "\\").last ?? sourcePath
+                let destinationPath = destinationFolder.isEmpty ? name : destinationFolder + "\\" + name
+                guard destinationPath != sourcePath else { continue }
+                try await store.moveRSSItem(path: sourcePath, to: destinationPath)
+                movedSelections.append(folderPaths.contains(sourcePath) ? .folder(destinationPath) : .feed(destinationPath))
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        await reload()
+        if !movedSelections.isEmpty {
+            selectedFeedItems = Set(movedSelections)
+            activeFeedSelection = movedSelections[0]
+        }
+        if !destinationFolder.isEmpty {
+            var expanded = expandedRSSFolderPaths
+            expanded.insert(destinationFolder)
+            saveExpandedRSSFolderPaths(expanded)
+        }
+    }
+
     @ViewBuilder
     private func rssNodeContextMenu(_ node: RSSNavigationNode) -> some View {
         switch node.selection {
@@ -746,6 +885,10 @@ struct RSSPane: View {
             rssProcessingEnabled = try? await store.rssProcessingEnabled()
             let validFeedPaths = Set(feeds.map(\.path))
             let validFolderPaths = Set(folders.map(\.path))
+            let validExpandedPaths = expandedRSSFolderPaths.intersection(validFolderPaths)
+            if validExpandedPaths != expandedRSSFolderPaths {
+                saveExpandedRSSFolderPaths(validExpandedPaths)
+            }
             func isValid(_ selection: RSSPaneSelection) -> Bool {
                 switch selection {
                 case .allArticles, .unreadArticles: true
