@@ -24,7 +24,7 @@ This checklist compares the native macOS preview with the desktop workflows in t
 | Torrent creator | Present | v1/v2/hybrid format, piece size, private mode, source/comment, trackers and web seeds, hidden-file handling, task history, export, and task removal are available. Source and output paths can be selected from the Mac for the bundled library or browsed on a remote server. |
 | Cookies and plugin management | Present | Cookie editing and search-plugin management are available. |
 | Statistics and execution log | Present | qBittorrent session statistics fields and log severity/search filters are available. |
-| Menus, toolbar, and window layout | Present | Toolbar visibility and label style, queue controls, filter sidebar, details pane, status bar, speed in title bar, optional free-space and external-IP status, menu bar, and Dock rate indicators, local sleep prevention, interface lock, About/help links, and session/tools menus are available. Native File, Transfers, Navigate, and Settings commands include macOS keyboard shortcuts for core actions, including adding links from the clipboard. |
+| Menus, toolbar, and window layout | Present | Toolbar visibility and label style, queue controls, filter sidebar, details pane, status bar, Search and RSS tab views filling the same window area as Transfers while keeping tabs at the top and connection status at the bottom, speed in title bar, optional free-space and external-IP status, menu bar, and Dock rate indicators, local sleep prevention, interface lock, About/help links, and session/tools menus are available. Native File, Transfers, Navigate, and Settings commands include macOS keyboard shortcuts for core actions, including adding links from the clipboard. |
 
 ## Verification completed
 

@@ -577,6 +577,7 @@ struct ContentView: View {
                 Divider()
                 ZStack {
                     SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(mainTab == .search ? 1 : 0)
                         .allowsHitTesting(mainTab == .search)
                         .accessibilityHidden(mainTab != .search)
@@ -593,13 +594,16 @@ struct ContentView: View {
                     }
                     if mainTab == .rss {
                         RSSPane(store: store)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if showStatusBar {
                     Divider()
                     statusBar
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .confirmationDialog("Recursive download confirmation", isPresented: $showsRecursiveTorrentConfirmation, titleVisibility: .visible) {
                 Button("Add Torrent Files (\(recursiveTorrentCandidates.count))") {
                     addRecursiveTorrentCandidates()
