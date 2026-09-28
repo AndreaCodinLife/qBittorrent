@@ -423,7 +423,12 @@ actor QBittorrentAPI {
     }
 
     func banPeer(address: String) async throws {
-        _ = try await request("transfer/banPeers", method: "POST", form: ["peers": address])
+        try await banPeers(addresses: [address])
+    }
+
+    func banPeers(addresses: [String]) async throws {
+        guard !addresses.isEmpty else { return }
+        _ = try await request("transfer/banPeers", method: "POST", form: ["peers": addresses.joined(separator: "|")])
     }
 
     func setSessionPaused(_ paused: Bool) async throws {
@@ -1131,6 +1136,19 @@ struct TorrentPeer: Decodable, Identifiable, Sendable {
     let host_name: String?
     var id: String { "\(ip):\(port ?? 0)" }
     var countryName: String { country.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown" }
+    var portSortValue: Int { port ?? 0 }
+    var connectionSortValue: String { connection ?? "" }
+    var flagsSortValue: String { flags ?? "" }
+    var clientSortValue: String { client ?? "" }
+    var peerIDClientSortValue: String { peer_id_client ?? "" }
+    var progressSortValue: Double { progress ?? 0 }
+    var downloadSpeedSortValue: Int64 { dl_speed ?? 0 }
+    var uploadSpeedSortValue: Int64 { up_speed ?? 0 }
+    var downloadedSortValue: Int64 { downloaded ?? 0 }
+    var uploadedSortValue: Int64 { uploaded ?? 0 }
+    var relevanceSortValue: Double { relevance ?? 0 }
+    var contributionSortValue: Double { contribution ?? 0 }
+    var filesSortValue: String { files ?? "" }
 
     var countryFlag: String? {
         guard let country_code else { return nil }

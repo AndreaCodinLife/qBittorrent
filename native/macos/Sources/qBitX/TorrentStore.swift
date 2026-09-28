@@ -644,8 +644,12 @@ final class TorrentStore {
     }
 
     func banPeer(address: String) async throws {
+        try await banPeers(addresses: [address])
+    }
+
+    func banPeers(addresses: [String]) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.banPeer(address: address)
+        try await api.banPeers(addresses: addresses)
     }
 
     func setSessionPaused(_ paused: Bool) async throws {

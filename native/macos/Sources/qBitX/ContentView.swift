@@ -3,6 +3,7 @@ import Charts
 import UniformTypeIdentifiers
 import TorrentSourceFileSupport
 import LocalAuthentication
+import Darwin
 
 private enum MainTab: String, CaseIterable, Identifiable {
     case transfers = "Transfers"
@@ -156,6 +157,9 @@ struct ContentView: View {
     @AppStorage("qBitX.notifyTorrentError") private var notifyOnTorrentError = true
     @State private var selectedTorrentIDs: Set<String> = []
     @SceneStorage("qBitX.transferColumns") private var columnCustomization = TableColumnCustomization<Torrent>()
+    @SceneStorage("qBitX.peerColumns") private var peerColumnCustomization = TableColumnCustomization<TorrentPeer>()
+    @State private var selectedPeerIDs: Set<String> = []
+    @State private var peerSortOrder = [KeyPathComparator<TorrentPeer>(\.ip)]
     @State private var textAction: TorrentTextAction?
     @State private var detailInput: DetailInput?
     @State private var statusFilter: TorrentFilter = .all
@@ -418,7 +422,10 @@ struct ContentView: View {
         .task(id: retryID) { store.start(retrying: retryID > 0) }
         .modifier(ProgramUpdatePresentation(checker: programUpdateChecker, automaticallyCheck: checkForUpdatesAutomatically))
         .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }
-        .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") { await loadDetails() }
+        .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") {
+            selectedPeerIDs = []
+            await loadDetails()
+        }
         .onChange(of: torrents.map(\.id)) { _, ids in
             selectedTorrentIDs.formIntersection(ids)
             if selectedTorrentIDs.isEmpty, let first = ids.first { selectedTorrentIDs = [first] }
@@ -550,7 +557,12 @@ struct ContentView: View {
             }
         }
         .sheet(item: $detailInput) { input in
-            ValueSheet(title: input.title, hint: input.hint, initialValue: input.initialValue) { value in
+            ValueSheet(
+                title: input.title,
+                hint: input.hint,
+                initialValue: input.initialValue,
+                allowsMultiline: input.operation == .addPeer
+            ) { value in
                 try await applyDetailInput(input, value: value)
             }
         }
@@ -1829,83 +1841,96 @@ struct ContentView: View {
             HStack {
                 Text("Peers").font(.caption.weight(.semibold))
                 Spacer()
-                Button { showDetailInput(.addPeer, title: "Add Peer", hint: "IP address:port") } label: { Image(systemName: "plus") }
+                Button { showDetailInput(.addPeer, title: "Add Peers", hint: "One peer per line: IPv4:port or [IPv6]:port") } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
-                    .help("Add peer")
-                    .accessibilityLabel("Add peer")
+                    .disabled(peerAdditionDisabledReason != nil)
+                    .help(peerAdditionDisabledReason ?? "Add peers")
+                    .accessibilityLabel("Add peers")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             if peers.isEmpty {
                 ContentUnavailableView("No Peers", systemImage: "person.2", description: Text("No peers are connected to this torrent."))
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 12) {
-                            peerColumnHeader("Country/Region", width: 150)
-                            peerColumnHeader("IP/Address", width: 120)
-                            peerColumnHeader("Port", width: 55)
-                            peerColumnHeader("Connection", width: 100)
-                            peerColumnHeader("Flags", width: 60)
-                            peerColumnHeader("Client", width: 140)
-                            peerColumnHeader("Peer ID Client", width: 140)
-                            peerColumnHeader("Progress", width: 75)
-                            peerColumnHeader("Down Speed", width: 100)
-                            peerColumnHeader("Up Speed", width: 100)
-                            peerColumnHeader("Downloaded", width: 105)
-                            peerColumnHeader("Uploaded", width: 105)
-                            peerColumnHeader("Relevance", width: 80)
-                            peerColumnHeader("Contribution", width: 90)
-                            peerColumnHeader("Files", width: 220)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        Divider()
-                        ForEach(peers) { peer in
-                            HStack(spacing: 12) {
-                                HStack(spacing: 5) {
-                                    if let flag = peer.countryFlag { Text(flag) }
-                                    else { Image(systemName: "globe").foregroundStyle(.tertiary) }
-                                    Text(peer.countryName).lineLimit(1)
-                                }
-                                .frame(width: 150, alignment: .leading)
-                                .help(peer.countryName)
-                                .accessibilityElement(children: .combine)
-                                .accessibilityLabel("Country or region: \(peer.countryName)")
-                                peerValue(peer.ip, width: 120, tooltip: peer.host_name ?? peer.ip)
-                                peerValue("\(peer.port ?? 0)", width: 55)
-                                peerValue(peer.connection ?? "—", width: 100)
-                                peerValue(peer.flags ?? "—", width: 60, tooltip: peer.flags_desc ?? "Peer flags")
-                                peerValue(peer.client ?? "Unknown client", width: 140)
-                                peerValue(peer.peer_id_client ?? "—", width: 140)
-                                peerValue((peer.progress ?? 0).formatted(.percent.precision(.fractionLength(0))), width: 75)
-                                peerValue(TransferStatus.rateText(peer.dl_speed ?? 0), width: 100)
-                                peerValue(TransferStatus.rateText(peer.up_speed ?? 0), width: 100)
-                                peerValue(ByteCountFormatter.string(fromByteCount: peer.downloaded ?? 0, countStyle: .file), width: 105)
-                                peerValue(ByteCountFormatter.string(fromByteCount: peer.uploaded ?? 0, countStyle: .file), width: 105)
-                                peerValue("\(((peer.relevance ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%", width: 80)
-                                peerValue("\(((peer.contribution ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%", width: 90)
-                                peerValue(peer.files?.replacingOccurrences(of: "\n", with: "; ") ?? "—", width: 220, tooltip: peer.files ?? "")
-                                Spacer(minLength: 0)
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                Button("Copy IP:port") { copyToPasteboard("\(peer.ip):\(peer.port ?? 0)") }
-                                Button("Ban Peer Permanently", role: .destructive) {
-                                    Task {
-                                        do { try await store.banPeer(address: "\(peer.ip):\(peer.port ?? 0)") }
-                                        catch { actionError = error.localizedDescription }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                Table(peers, selection: $selectedPeerIDs, sortOrder: $peerSortOrder, columnCustomization: $peerColumnCustomization) {
+                    peerPrimaryColumns
+                    peerDetailColumns
                 }
+                .contextMenu(forSelectionType: String.self) { target in
+                    peerContextMenu(for: target)
+                }
+                .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
             }
         }
+    }
+
+    @TableColumnBuilder<TorrentPeer, KeyPathComparator<TorrentPeer>>
+    private var peerPrimaryColumns: some TableColumnContent<TorrentPeer, KeyPathComparator<TorrentPeer>> {
+        TableColumn("Country/Region", value: \.countryName) { peer in
+            HStack(spacing: 5) {
+                if let flag = peer.countryFlag { Text(flag) }
+                else { Image(systemName: "globe").foregroundStyle(.tertiary) }
+                Text(peer.countryName).lineLimit(1)
+            }
+            .help(peer.countryName)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Country or region: \(peer.countryName)")
+        }
+        .width(min: 110, ideal: 150)
+        .customizationID("peer.country")
+        TableColumn("IP/Address", value: \.ip) { peer in
+            Text(peer.ip).lineLimit(1).help(peer.host_name ?? peer.ip)
+        }
+        .width(min: 100, ideal: 140)
+        .customizationID("peer.ip")
+        TableColumn("Port", value: \.portSortValue) { peer in Text("\(peer.port ?? 0)") }
+            .width(min: 50, ideal: 65).customizationID("peer.port")
+        TableColumn("Connection", value: \.connectionSortValue) { peer in Text(peer.connection ?? "—") }
+            .width(min: 80, ideal: 115).customizationID("peer.connection")
+        TableColumn("Flags", value: \.flagsSortValue) { peer in Text(peer.flags ?? "—").help(peer.flags_desc ?? "Peer flags") }
+            .width(min: 55, ideal: 70).customizationID("peer.flags")
+        TableColumn("Client", value: \.clientSortValue) { peer in Text(peer.client ?? "Unknown client") }
+            .width(min: 100, ideal: 150).customizationID("peer.client")
+        TableColumn("Peer ID Client", value: \.peerIDClientSortValue) { peer in Text(peer.peer_id_client ?? "—") }
+            .width(min: 110, ideal: 150).customizationID("peer.peerIDClient").defaultVisibility(.hidden)
+        TableColumn("Progress", value: \.progressSortValue) { peer in
+            Text((peer.progress ?? 0).formatted(.percent.precision(.fractionLength(0))))
+        }
+        .width(min: 65, ideal: 85)
+        .customizationID("peer.progress")
+    }
+
+    @TableColumnBuilder<TorrentPeer, KeyPathComparator<TorrentPeer>>
+    private var peerDetailColumns: some TableColumnContent<TorrentPeer, KeyPathComparator<TorrentPeer>> {
+        TableColumn("Down Speed", value: \.downloadSpeedSortValue) { peer in Text(TransferStatus.rateText(peer.dl_speed ?? 0)) }
+            .width(min: 85, ideal: 110).customizationID("peer.downSpeed")
+        TableColumn("Up Speed", value: \.uploadSpeedSortValue) { peer in Text(TransferStatus.rateText(peer.up_speed ?? 0)) }
+            .width(min: 85, ideal: 110).customizationID("peer.upSpeed")
+        TableColumn("Downloaded", value: \.downloadedSortValue) { peer in
+            Text(ByteCountFormatter.string(fromByteCount: peer.downloaded ?? 0, countStyle: .file))
+        }
+        .width(min: 85, ideal: 110)
+        .customizationID("peer.downloaded")
+        TableColumn("Uploaded", value: \.uploadedSortValue) { peer in
+            Text(ByteCountFormatter.string(fromByteCount: peer.uploaded ?? 0, countStyle: .file))
+        }
+        .width(min: 85, ideal: 110)
+        .customizationID("peer.uploaded")
+        TableColumn("Relevance", value: \.relevanceSortValue) { peer in
+            Text("\(((peer.relevance ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%")
+        }
+        .width(min: 70, ideal: 90)
+        .customizationID("peer.relevance")
+        TableColumn("Contribution", value: \.contributionSortValue) { peer in
+            Text("\(((peer.contribution ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%")
+        }
+        .width(min: 80, ideal: 100)
+        .customizationID("peer.contribution")
+        TableColumn("Files", value: \.filesSortValue) { peer in
+            Text(peer.files?.replacingOccurrences(of: "\n", with: "; ") ?? "—").help(peer.files ?? "")
+        }
+        .width(min: 150, ideal: 260)
+        .customizationID("peer.files")
     }
 
     private func peerColumnHeader(_ title: String, width: CGFloat) -> some View {
@@ -1913,8 +1938,30 @@ struct ContentView: View {
             .frame(width: width, alignment: .leading)
     }
 
-    private func peerValue(_ value: String, width: CGFloat, tooltip: String? = nil) -> some View {
-        Text(value).lineLimit(1).frame(width: width, alignment: .leading).help(tooltip ?? value)
+    @ViewBuilder
+    private func peerContextMenu(for target: Set<String>) -> some View {
+        let selectedPeers = peers.filter { target.contains($0.id) }
+        Button("Add Peers…") {
+            showDetailInput(.addPeer, title: "Add Peers", hint: "One peer per line: IPv4:port or [IPv6]:port")
+        }
+        .disabled(peerAdditionDisabledReason != nil)
+        Button("Copy IP:port") {
+            copyToPasteboard(selectedPeers.map(peerAddress).joined(separator: "\n"))
+        }
+        .disabled(selectedPeers.isEmpty)
+        Button("Ban Peer Permanently", role: .destructive) {
+            let addresses = selectedPeers.map(peerAddress)
+            Task {
+                do { try await store.banPeers(addresses: addresses) }
+                catch { actionError = error.localizedDescription }
+            }
+        }
+        .disabled(selectedPeers.isEmpty)
+    }
+
+    private func peerAddress(_ peer: TorrentPeer) -> String {
+        let host = peer.ip.contains(":") ? "[\(peer.ip)]" : peer.ip
+        return "\(host):\(peer.port ?? 0)"
     }
 
     private var webSeedDetails: some View {
@@ -2333,13 +2380,55 @@ struct ContentView: View {
         case let .editTracker(oldURL): try await store.editTracker(hash: input.hash, url: oldURL, newURL: value)
         case .addWebSeed: try await store.addWebSeed(hash: input.hash, url: value)
         case let .editWebSeed(oldURL): try await store.editWebSeed(hash: input.hash, url: oldURL, newURL: value)
-        case .addPeer: try await store.addPeer(hash: input.hash, address: value)
+        case .addPeer:
+            let peers = value.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            guard !peers.isEmpty else { throw PeerAddressInputError.noPeers }
+            if let invalidPeer = peers.first(where: { !isValidPeerAddress($0) }) {
+                throw PeerAddressInputError.invalidPeer(invalidPeer)
+            }
+            try await store.addPeer(hash: input.hash, address: peers.joined(separator: "|"))
         case let .renameFile(oldPath):
             let parent = (oldPath as NSString).deletingLastPathComponent
             let newPath = parent.isEmpty ? value : (parent as NSString).appendingPathComponent(value)
             try await store.renameFile(hash: input.hash, oldPath: oldPath, newPath: newPath)
         }
         if input.operation != .addPeer { await loadDetails() }
+    }
+
+    private var peerAdditionDisabledReason: String? {
+        guard let selectedTorrent else { return "Select a torrent first" }
+        if ["yes", "true", "1"].contains(selectedTorrent.column("private").lowercased()) {
+            return "Cannot add peers to a private torrent"
+        }
+        if selectedTorrent.state == .checking { return "Cannot add peers while the torrent is checking" }
+        if selectedTorrent.state == .queued { return "Cannot add peers while the torrent is queued" }
+        return nil
+    }
+
+    private func isValidPeerAddress(_ source: String) -> Bool {
+        let host: String
+        let portText: Substring
+        let isIPv6: Bool
+        if source.first == "[", let closingBracket = source.firstIndex(of: "]"), source[closingBracket...].hasPrefix("]:") {
+            host = String(source[source.index(after: source.startIndex)..<closingBracket])
+            portText = source[source.index(closingBracket, offsetBy: 2)...]
+            isIPv6 = true
+        } else if let separator = source.lastIndex(of: ":"), !source[..<separator].contains(":") {
+            host = String(source[..<separator])
+            portText = source[source.index(after: separator)...]
+            isIPv6 = false
+        } else {
+            return false
+        }
+        guard let port = UInt16(portText), port > 0, !host.isEmpty else { return false }
+        if isIPv6 {
+            var address = in6_addr()
+            return host.withCString { inet_pton(AF_INET6, $0, &address) == 1 }
+        }
+        var address = in_addr()
+        return host.withCString { inet_pton(AF_INET, $0, &address) == 1 }
     }
 
     private func performDetailAction(_ action: (String) async throws -> Void) async {
@@ -2803,6 +2892,18 @@ private struct DetailInput: Identifiable {
     let initialValue: String
 }
 
+private enum PeerAddressInputError: LocalizedError {
+    case noPeers
+    case invalidPeer(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noPeers: "Please enter at least one peer."
+        case let .invalidPeer(peer): "The peer ‘\(peer)’ is invalid. Use IPv4:port or [IPv6]:port."
+        }
+    }
+}
+
 private struct TrackerBatchEditorTarget: Identifiable {
     let id = UUID()
     let hashes: [String]
@@ -2976,16 +3077,18 @@ private struct ValueSheet: View {
     let title: String
     let hint: String
     let allowsEmpty: Bool
+    let allowsMultiline: Bool
     let pathStore: TorrentStore?
     let onApply: (String) async throws -> Void
     @State private var value: String
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    init(title: String, hint: String, initialValue: String, allowsEmpty: Bool = false, pathStore: TorrentStore? = nil, onApply: @escaping (String) async throws -> Void) {
+    init(title: String, hint: String, initialValue: String, allowsEmpty: Bool = false, allowsMultiline: Bool = false, pathStore: TorrentStore? = nil, onApply: @escaping (String) async throws -> Void) {
         self.title = title
         self.hint = hint
         self.allowsEmpty = allowsEmpty
+        self.allowsMultiline = allowsMultiline
         self.pathStore = pathStore
         self.onApply = onApply
         _value = State(initialValue: initialValue)
@@ -2994,10 +3097,22 @@ private struct ValueSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(LocalizedStringKey(title)).font(.title2.weight(.semibold))
-            HStack {
-                TextField(hint, text: $value).textFieldStyle(.roundedBorder)
-                if let pathStore {
-                    ServerPathBrowserButton(store: pathStore, path: $value, kind: .directory)
+            if allowsMultiline {
+                TextEditor(text: $value)
+                    .font(.body.monospaced())
+                    .scrollContentBackground(.hidden)
+                    .padding(5)
+                    .frame(minHeight: 140)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 9))
+                Text("Enter one peer per line. IPv6 addresses must use brackets.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    TextField(hint, text: $value).textFieldStyle(.roundedBorder)
+                    if let pathStore {
+                        ServerPathBrowserButton(store: pathStore, path: $value, kind: .directory)
+                    }
                 }
             }
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
@@ -3022,7 +3137,7 @@ private struct ValueSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 480)
+        .frame(width: allowsMultiline ? 520 : 480)
     }
 }
 
