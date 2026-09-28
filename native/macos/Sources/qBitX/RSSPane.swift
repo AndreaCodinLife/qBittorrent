@@ -150,7 +150,7 @@ struct RSSPane: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        Group {
             HSplitView {
                 VStack(spacing: 0) {
                     HStack {
@@ -295,7 +295,7 @@ struct RSSPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minWidth: 350)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: store.isConnected) {
