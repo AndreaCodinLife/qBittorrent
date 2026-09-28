@@ -129,7 +129,12 @@ public enum RSSArticleMarkup {
             else { continue }
             let rawValue = String(tag[valueRange])
             let value = rawValue.count >= 2 ? String(rawValue.dropFirst().dropLast()) : rawValue
-            let safeDeclarations = value.split(separator: ";").compactMap { declaration -> String? in
+            guard value.count <= 4_096 else {
+                tag.replaceSubrange(attributeRange, with: "")
+                result.replaceSubrange(tagRange, with: tag)
+                continue
+            }
+            let safeDeclarations = value.split(separator: ";", maxSplits: 64).compactMap { declaration -> String? in
                 guard let colon = declaration.firstIndex(of: ":") else { return nil }
                 let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let cssValue = declaration[declaration.index(after: colon)...]
@@ -150,7 +155,8 @@ public enum RSSArticleMarkup {
               let valueRange = Range(match.range(at: 1), in: tag)
         else { return nil }
         let value = String(tag[valueRange])
-        let declarations = value.split(separator: ";").compactMap { declaration -> String? in
+        guard value.count <= 4_096 else { return nil }
+        let declarations = value.split(separator: ";", maxSplits: 64).compactMap { declaration -> String? in
             guard let colon = declaration.firstIndex(of: ":") else { return nil }
             let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let cssValue = declaration[declaration.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -161,10 +167,49 @@ public enum RSSArticleMarkup {
     }
 
     private static func isSafeCSSValue(_ value: String, for property: String) -> Bool {
+        guard value.count <= 128,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              !value.contains("\\")
+        else { return false }
         let normalized = value.lowercased()
         switch property {
         case "color", "background-color":
             return normalized.range(of: #"^(?:[a-z]{1,20}|#[0-9a-f]{3,8}|rgba?\(\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)|transparent)$"#, options: .regularExpression) != nil
+        case "margin", "margin-top", "margin-right", "margin-bottom", "margin-left":
+            if normalized == "auto" { return property == "margin" }
+            let values = normalized.split(whereSeparator: \.isWhitespace)
+            return !values.isEmpty && values.count <= (property == "margin" ? 4 : 1)
+                && values.allSatisfy { isSafeCSSLength(String($0), allowNegative: true) }
+        case "padding", "padding-top", "padding-right", "padding-bottom", "padding-left":
+            let values = normalized.split(whereSeparator: \.isWhitespace)
+            return !values.isEmpty && values.count <= (property == "padding" ? 4 : 1)
+                && values.allSatisfy { isSafeCSSLength(String($0), allowNegative: false) }
+        case "border-width", "border-top-width", "border-right-width", "border-bottom-width", "border-left-width":
+            let values = normalized.split(whereSeparator: \.isWhitespace)
+            return !values.isEmpty && values.count <= (property == "border-width" ? 4 : 1)
+                && values.allSatisfy { isSafeCSSLength(String($0), allowNegative: false) }
+        case "border-style", "border-top-style", "border-right-style", "border-bottom-style", "border-left-style":
+            let values = normalized.split(whereSeparator: \.isWhitespace)
+            let styles: Set<String> = ["none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset"]
+            return !values.isEmpty && values.count <= (property == "border-style" ? 4 : 1)
+                && values.allSatisfy { styles.contains(String($0)) }
+        case "border-color", "border-top-color", "border-right-color", "border-bottom-color", "border-left-color":
+            let values = normalized.split(whereSeparator: \.isWhitespace)
+            return !values.isEmpty && values.count <= (property == "border-color" ? 4 : 1)
+                && values.allSatisfy { isSafeCSSColor(String($0)) }
+        case "border", "border-top", "border-right", "border-bottom", "border-left":
+            let tokens = normalized.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard !tokens.isEmpty, tokens.count <= 3 else { return false }
+            var hasWidth = false
+            var hasStyle = false
+            var hasColor = false
+            for token in tokens {
+                if isSafeCSSLength(token, allowNegative: false) && !hasWidth { hasWidth = true }
+                else if ["none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset"].contains(token), !hasStyle { hasStyle = true }
+                else if isSafeCSSColor(token) && !hasColor { hasColor = true }
+                else { return false }
+            }
+            return true
         case "font-size", "line-height", "text-indent", "letter-spacing":
             return normalized.range(of: #"^(?:[0-9]{1,2}(?:\.\d+)?)(?:px|pt|em|rem|%)?$|^(?:xx-small|x-small|small|medium|large|x-large|xx-large|smaller|larger)$"#, options: .regularExpression) != nil
         case "font-weight":
@@ -179,11 +224,37 @@ public enum RSSArticleMarkup {
             return ["normal", "pre", "pre-wrap", "pre-line", "nowrap"].contains(normalized)
         case "vertical-align":
             return ["baseline", "sub", "super", "text-top", "text-bottom", "middle", "top", "bottom"].contains(normalized)
+        case "text-transform":
+            return ["none", "capitalize", "uppercase", "lowercase"].contains(normalized)
+        case "float":
+            return ["none", "left", "right"].contains(normalized)
+        case "clear":
+            return ["none", "left", "right", "both"].contains(normalized)
+        case "word-spacing":
+            return isSafeCSSLength(normalized, allowNegative: true)
+        case "font-kerning":
+            return ["auto", "normal", "none"].contains(normalized)
+        case "font-variant":
+            return ["normal", "small-caps"].contains(normalized)
         case "font-family":
             return value.count <= 120 && value.range(of: #"^[A-Za-z0-9 ,_'\-]+$"#, options: .regularExpression) != nil
         default:
             return false
         }
+    }
+
+    private static func isSafeCSSColor(_ value: String) -> Bool {
+        value.range(of: #"^(?:[a-z]{1,20}|#[0-9a-f]{3,8}|rgba?\(\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)|transparent)$"#, options: .regularExpression) != nil
+    }
+
+    private static func isSafeCSSLength(_ value: String, allowNegative: Bool) -> Bool {
+        let numberPattern = allowNegative
+            ? #"^[+-]?(?:[0-9]{1,4}(?:\.[0-9]{1,2})?|\.[0-9]{1,2})(?:px|pt|em|ex|rem|%)?$"#
+            : #"^(?:[0-9]{1,4}(?:\.[0-9]{1,2})?|\.[0-9]{1,2})(?:px|pt|em|ex|rem|%)?$"#
+        guard value.range(of: numberPattern, options: .regularExpression) != nil else { return false }
+        let numericPart = value.replacingOccurrences(of: #"(?:px|pt|em|ex|rem|%)$"#, with: "", options: .regularExpression)
+        guard let number = Double(numericPart) else { return false }
+        return abs(number) <= 1_000
     }
 
     private static func isAllowedLink(_ url: URL) -> Bool {
@@ -233,7 +304,7 @@ public enum RSSArticleMarkup {
         text = replacingBBCodeTags(#"(?is)\[size=(.*?)\](.*?)\[/size\]"#, in: text) { value, body in
             let sizeText = value.replacingOccurrences(of: "&quot;", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard let size = Int(sizeText) else { return body }
-            return "<font size=\"\(min(max(size, 1), 72))\">\(body)</font>"
+            return "<span style=\"font-size: \(min(max(size, 1), 72))px\">\(body)</span>"
         }
         return "<pre>\(text)</pre>"
     }

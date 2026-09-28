@@ -24,15 +24,36 @@ struct RSSArticleMarkupTests {
     }
 
     @Test func keepsSafeInlineStylesAndStripsResourceAndLayoutCSS() {
-        let html = #"<p style="color:#123456; font-size:18px; background-image:url(https://tracker.example/pixel); position:fixed">Styled</p>"#
+        let html = #"<p style="color:#123456; font-size:18px; margin:8px 12px; padding-left:4px; border:1px solid #abc; text-transform:uppercase; float:left; word-spacing:2px; font-kerning:none; font-variant:small-caps; background-image:url(https://tracker.example/pixel); position:fixed; width:9001px; padding-top:-2px">Styled</p>"#
 
         let sanitized = RSSArticleMarkup.sanitizedHTMLBody(html, baseURL: "https://feed.example/")
 
         #expect(sanitized.contains(#"color: #123456"#))
         #expect(sanitized.contains(#"font-size: 18px"#))
+        #expect(sanitized.contains(#"margin: 8px 12px"#))
+        #expect(sanitized.contains(#"padding-left: 4px"#))
+        #expect(sanitized.contains(#"border: 1px solid #abc"#))
+        #expect(sanitized.contains(#"text-transform: uppercase"#))
+        #expect(sanitized.contains(#"float: left"#))
+        #expect(sanitized.contains(#"word-spacing: 2px"#))
+        #expect(sanitized.contains(#"font-kerning: none"#))
+        #expect(sanitized.contains(#"font-variant: small-caps"#))
         #expect(!sanitized.contains("background-image"))
         #expect(!sanitized.contains("tracker.example"))
         #expect(!sanitized.contains("position"))
+        #expect(!sanitized.contains("width"))
+        #expect(!sanitized.contains("padding-top"))
+    }
+
+    @Test func stripsOversizedInlineStyleAttributes() {
+        let oversizedValue = String(repeating: "a", count: 4_097)
+        let html = "<p style=\"font-family:\(oversizedValue)\">Styled</p>"
+
+        let sanitized = RSSArticleMarkup.sanitizedHTMLBody(html, baseURL: "https://feed.example/")
+
+        #expect(sanitized.contains("Styled"))
+        #expect(!sanitized.contains("style="))
+        #expect(!sanitized.contains(oversizedValue))
     }
 
     @Test func resolvesRelativeImageURLsAndRejectsNonHTTPImages() {
@@ -78,7 +99,7 @@ struct RSSArticleMarkupTests {
 
         #expect(content.contains(#"href="https://news.example/story?a=1&amp;b=2""#))
         #expect(content.contains(##"<font color="#ff0099">Pink</font>"##))
-        #expect(content.contains(#"<font size="18">Large</font>"#))
+        #expect(content.contains(#"<span style="font-size: 18px">Large</span>"#))
         #expect(!content.contains("url(https://tracker.example)"))
         #expect(content.contains("Unsafe"))
     }
