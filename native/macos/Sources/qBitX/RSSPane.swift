@@ -34,132 +34,135 @@ struct RSSPane: View {
     }
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("FEEDS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button { showsAddFolder = true } label: { Image(systemName: "folder.badge.plus") }
-                        .buttonStyle(.glass).help("Add RSS folder")
-                        .accessibilityLabel("Add RSS folder")
-                    Button { showsAddFeed = true } label: { Image(systemName: "plus") }
-                        .buttonStyle(.glass)
-                        .help("Add RSS feed")
-                        .accessibilityLabel("Add RSS feed")
-                }
-                .padding(12)
-                List(selection: $selectedFeedID) {
-                    if !folders.isEmpty {
-                        Section("Folders") {
-                            ForEach(folders) { folder in
-                                Label(folder.title, systemImage: "folder")
-                                    .accessibilityLabel("RSS folder, \(folder.title)")
-                                    .contextMenu {
-                                        Button("Rename Folder…") {
-                                            editingFolderPath = folder.path
-                                            folderName = (folder.path as NSString).lastPathComponent
-                                            showsRenameFolder = true
-                                        }
-                                        Button("Remove Folder", role: .destructive) {
-                                            Task {
-                                                do { try await store.removeRSSFeed(path: folder.path); await reload() }
-                                                catch { errorMessage = error.localizedDescription }
+        GeometryReader { geometry in
+            HSplitView {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("FEEDS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        Spacer()
+                        Button { showsAddFolder = true } label: { Image(systemName: "folder.badge.plus") }
+                            .buttonStyle(.glass).help("Add RSS folder")
+                            .accessibilityLabel("Add RSS folder")
+                        Button { showsAddFeed = true } label: { Image(systemName: "plus") }
+                            .buttonStyle(.glass)
+                            .help("Add RSS feed")
+                            .accessibilityLabel("Add RSS feed")
+                    }
+                    .padding(12)
+                    List(selection: $selectedFeedID) {
+                        if !folders.isEmpty {
+                            Section("Folders") {
+                                ForEach(folders) { folder in
+                                    Label(folder.title, systemImage: "folder")
+                                        .accessibilityLabel("RSS folder, \(folder.title)")
+                                        .contextMenu {
+                                            Button("Rename Folder…") {
+                                                editingFolderPath = folder.path
+                                                folderName = (folder.path as NSString).lastPathComponent
+                                                showsRenameFolder = true
+                                            }
+                                            Button("Remove Folder", role: .destructive) {
+                                                Task {
+                                                    do { try await store.removeRSSFeed(path: folder.path); await reload() }
+                                                    catch { errorMessage = error.localizedDescription }
+                                                }
                                             }
                                         }
+                                }
+                            }
+                        }
+                        Section("Feeds") {
+                            ForEach(feeds) { feed in
+                                Label(feed.title, systemImage: "dot.radiowaves.left.and.right")
+                                    .tag(feed.id)
+                                    .accessibilityLabel("RSS feed, \(feed.title)")
+                                    .contextMenu {
+                                        Button("Refresh") { Task { await refresh(feed) } }
+                                        Button("Mark All Read") { Task { await markRead(feed) } }
+                                        Button("Edit URL…") { selectedFeedID = feed.id; editedFeedURL = feed.url; showsEditFeed = true }
+                                        Button("Rename or Move…") { editingFeedPath = feed.path; newFeedPath = feed.path; showsMoveFeed = true }
+                                        Button("Remove Feed", role: .destructive) { selectedFeedID = feed.id; showsRemoveFeed = true }
                                     }
                             }
                         }
                     }
-                    Section("Feeds") {
-                        ForEach(feeds) { feed in
-                            Label(feed.title, systemImage: "dot.radiowaves.left.and.right")
-                                .tag(feed.id)
-                                .accessibilityLabel("RSS feed, \(feed.title)")
-                                .contextMenu {
-                                    Button("Refresh") { Task { await refresh(feed) } }
-                                    Button("Mark All Read") { Task { await markRead(feed) } }
-                                    Button("Edit URL…") { selectedFeedID = feed.id; editedFeedURL = feed.url; showsEditFeed = true }
-                                    Button("Rename or Move…") { editingFeedPath = feed.path; newFeedPath = feed.path; showsMoveFeed = true }
-                                    Button("Remove Feed", role: .destructive) { selectedFeedID = feed.id; showsRemoveFeed = true }
-                                }
-                        }
+                    .listStyle(.sidebar)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(minWidth: 190, idealWidth: 230)
+                VStack(spacing: 0) {
+                    HStack {
+                        Text(selectedFeed?.title ?? "RSS").font(.headline)
+                        Spacer()
+                        Button("Downloader Rules…") { showsRules = true }
+                            .buttonStyle(.glass)
+                        Button { if let feed = selectedFeed { Task { await refresh(feed) } } else { Task { await reload() } } } label: { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(.glass)
+                            .help("Refresh feeds")
+                            .accessibilityLabel(selectedFeed.map { "Refresh \($0.title)" } ?? "Refresh RSS feeds")
                     }
-                }
-                .listStyle(.sidebar)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .frame(minWidth: 190, idealWidth: 230)
-            VStack(spacing: 0) {
-                HStack {
-                    Text(selectedFeed?.title ?? "RSS").font(.headline)
-                    Spacer()
-                    Button("Downloader Rules…") { showsRules = true }
-                        .buttonStyle(.glass)
-                    Button { if let feed = selectedFeed { Task { await refresh(feed) } } else { Task { await reload() } } } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.glass)
-                        .help("Refresh feeds")
-                        .accessibilityLabel(selectedFeed.map { "Refresh \($0.title)" } ?? "Refresh RSS feeds")
-                }
-                .padding(12)
-                Divider()
-                if let errorMessage {
-                    ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let feed = selectedFeed {
-                    TextField("Filter articles…", text: $articleFilter)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Filter RSS articles")
-                        .padding(10)
-                    if visibleArticles.isEmpty {
-                        ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("This feed has no articles."))
+                    .padding(12)
+                    Divider()
+                    if let errorMessage {
+                        ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        List(visibleArticles) { article in
-                            HStack(spacing: 12) {
-                                Image(systemName: article.isRead ? "circle" : "circle.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(articleColor(for: article))
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(article.title)
-                                        .fontWeight(article.isRead ? .regular : .semibold)
+                    } else if let feed = selectedFeed {
+                        TextField("Filter articles…", text: $articleFilter)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Filter RSS articles")
+                            .padding(10)
+                        if visibleArticles.isEmpty {
+                            ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("This feed has no articles."))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            List(visibleArticles) { article in
+                                HStack(spacing: 12) {
+                                    Image(systemName: article.isRead ? "circle" : "circle.fill")
+                                        .font(.caption2)
                                         .foregroundStyle(articleColor(for: article))
-                                    Text(article.date).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button("Add Torrent") {
-                                    Task {
-                                        do {
-                                            try await store.addRSSArticle(article)
-                                            try await store.markRSSArticleRead(path: feed.path, articleID: article.id)
-                                            await reload()
-                                        } catch { errorMessage = error.localizedDescription }
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(article.title)
+                                            .fontWeight(article.isRead ? .regular : .semibold)
+                                            .foregroundStyle(articleColor(for: article))
+                                        Text(article.date).font(.caption).foregroundStyle(.secondary)
                                     }
-                                }
-                                .buttonStyle(.glass)
-                            }
-                            .contextMenu {
-                                Button("Mark Read") {
-                                    Task {
-                                        do { try await store.markRSSArticleRead(path: feed.path, articleID: article.id); await reload() }
-                                        catch { errorMessage = error.localizedDescription }
+                                    Spacer()
+                                    Button("Add Torrent") {
+                                        Task {
+                                            do {
+                                                try await store.addRSSArticle(article)
+                                                try await store.markRSSArticleRead(path: feed.path, articleID: article.id)
+                                                await reload()
+                                            } catch { errorMessage = error.localizedDescription }
+                                        }
                                     }
+                                    .buttonStyle(.glass)
                                 }
-                                if let url = URL(string: article.link), ["http", "https"].contains(url.scheme ?? "") {
-                                    Button("Open Article") { NSWorkspace.shared.open(url) }
+                                .contextMenu {
+                                    Button("Mark Read") {
+                                        Task {
+                                            do { try await store.markRSSArticleRead(path: feed.path, articleID: article.id); await reload() }
+                                            catch { errorMessage = error.localizedDescription }
+                                        }
+                                    }
+                                    if let url = URL(string: article.link), ["http", "https"].contains(url.scheme ?? "") {
+                                        Button("Open Article") { NSWorkspace.shared.open(url) }
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        ContentUnavailableView("No Feed Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Select a feed or add a new one."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                } else {
-                    ContentUnavailableView("No Feed Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Select a feed or add a new one."))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 350)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(minWidth: 350)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: store.isConnected) {
             guard store.isConnected else { return }
             await reload()
