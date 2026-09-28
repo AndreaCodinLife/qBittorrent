@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import QBitXWidgetSupport
+import RSSArticleSupport
 import TorrentLinkInput
 import WebAPICompatibility
 import WidgetKit
@@ -776,14 +777,17 @@ final class TorrentStore {
         await refresh()
     }
 
-    func rssFeeds() async throws -> [RSSFeed] {
+    func rssFeedSnapshot() async throws -> RSSFeedSnapshot {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.rssFeeds()
+        return try await api.rssFeedSnapshot()
+    }
+
+    func rssFeeds() async throws -> [RSSFeed] {
+        try await rssFeedSnapshot().feeds
     }
 
     func rssFolders() async throws -> [RSSFolder] {
-        guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.rssFolders()
+        try await rssFeedSnapshot().folders
     }
 
     func rssProcessingEnabled() async throws -> Bool? {

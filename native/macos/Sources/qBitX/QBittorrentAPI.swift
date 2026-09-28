@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import RSSArticleSupport
 
 enum APIAuthentication: Sendable {
     case apiKey(String)
@@ -527,72 +528,17 @@ actor QBittorrentAPI {
         ])
     }
 
-    func rssFeeds() async throws -> [RSSFeed] {
+    func rssFeedSnapshot() async throws -> RSSFeedSnapshot {
         let data = try await request("rss/items", query: ["withData": "true"])
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw APIError.badResponse
-        }
-        var feeds: [RSSFeed] = []
-        let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
-        dateFormatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
-        func collect(_ node: [String: Any], path: String) {
-            for (name, value) in node {
-                guard let entry = value as? [String: Any] else { continue }
-                let itemPath = path.isEmpty ? name : "\(path)\\\(name)"
-                if let url = entry["url"] as? String {
-                    let rawFeedTitle = (entry["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    let feedTitle = rawFeedTitle.isEmpty ? name : rawFeedTitle
-                    let refreshInterval = entry["refreshInterval"] as? Int ?? 0
-                    let articles = (entry["articles"] as? [[String: Any]] ?? []).map { article in
-                        let date = article["date"] as? String ?? ""
-                        return RSSArticle(
-                            id: article["id"] as? String ?? UUID().uuidString,
-                            feedPath: itemPath,
-                            feedTitle: feedTitle,
-                            title: article["title"] as? String ?? "Untitled",
-                            author: article["author"] as? String ?? "",
-                            description: article["description"] as? String ?? "",
-                            link: article["link"] as? String ?? "",
-                            torrentURL: article["torrentURL"] as? String ?? "",
-                            date: date,
-                            dateValue: dateFormatter.date(from: date),
-                            isRead: article["isRead"] as? Bool ?? false
-                        )
-                    }
-                    feeds.append(RSSFeed(
-                        path: itemPath,
-                        title: feedTitle,
-                        url: url,
-                        refreshInterval: refreshInterval,
-                        isLoading: entry["isLoading"] as? Bool ?? false,
-                        hasError: entry["hasError"] as? Bool ?? false,
-                        articles: articles
-                    ))
-                } else {
-                    collect(entry, path: itemPath)
-                }
-            }
-        }
-        collect(root, path: "")
-        return feeds.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        return try RSSFeedSnapshotParser.parse(data)
+    }
+
+    func rssFeeds() async throws -> [RSSFeed] {
+        try await rssFeedSnapshot().feeds
     }
 
     func rssFolders() async throws -> [RSSFolder] {
-        let data = try await request("rss/items")
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw APIError.badResponse }
-        var folders: [RSSFolder] = []
-        func collect(_ node: [String: Any], path: String) {
-            for (name, value) in node {
-                guard let entry = value as? [String: Any], entry["url"] == nil else { continue }
-                let itemPath = path.isEmpty ? name : "\(path)\\\(name)"
-                folders.append(RSSFolder(path: itemPath, title: name))
-                collect(entry, path: itemPath)
-            }
-        }
-        collect(root, path: "")
-        return folders.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+        try await rssFeedSnapshot().folders
     }
 
     func rssProcessingEnabled() async throws -> Bool? {
@@ -1268,41 +1214,8 @@ struct SearchResult: Decodable, Identifiable, Sendable {
     }
 }
 
-struct RSSFeed: Identifiable, Sendable {
-    let path: String
-    let title: String
-    let url: String
-    let refreshInterval: Int
-    let isLoading: Bool
-    let hasError: Bool
-    let articles: [RSSArticle]
-    var id: String { path }
-}
-
 private struct RSSProcessingPreferences: Decodable {
     let rss_processing_enabled: Bool?
-}
-
-struct RSSFolder: Identifiable, Sendable {
-    let path: String
-    let title: String
-    var id: String { path }
-}
-
-struct RSSArticle: Identifiable, Sendable {
-    let id: String
-    let feedPath: String
-    let feedTitle: String
-    let title: String
-    let author: String
-    let description: String
-    let link: String
-    let torrentURL: String
-    let date: String
-    let dateValue: Date?
-    let isRead: Bool
-
-    var selectionID: String { "\(feedPath)\u{1F}\(id)" }
 }
 
 private struct AddTorrentResponse: Decodable {

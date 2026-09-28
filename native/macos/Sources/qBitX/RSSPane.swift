@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import RSSArticleSupport
 import QBitXThemeSupport
 import TorrentLinkInput
 
@@ -877,11 +878,12 @@ struct RSSPane: View {
 
     private func reload() async {
         do {
-            feeds = try await store.rssFeeds()
+            let snapshot = try await store.rssFeedSnapshot()
+            feeds = snapshot.feeds
             unreadCount = feeds.reduce(0) { count, feed in
                 count + feed.articles.filter { !$0.isRead }.count
             }
-            folders = try await store.rssFolders()
+            folders = snapshot.folders
             rssProcessingEnabled = try? await store.rssProcessingEnabled()
             let validFeedPaths = Set(feeds.map(\.path))
             let validFolderPaths = Set(folders.map(\.path))
