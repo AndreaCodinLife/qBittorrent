@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import QBitXWidgetSupport
 import TorrentLinkInput
+import WebAPICompatibility
 import WidgetKit
 
 enum TorrentStoreError: LocalizedError {
@@ -113,24 +114,10 @@ final class TorrentStore {
     var usesBundledBackend: Bool { SavedRemoteConnection.load() == nil }
 
     var webAPICompatibilityMessage: String? {
-        guard isConnected else { return nil }
-        guard let current = Self.versionComponents(serverAPIVersion) else {
-            return "qBitX could not read this server's Web API version, so full compatibility cannot be confirmed. Some newer features may be unavailable."
-        }
-        let minimum = [2, 16, 2]
-        let count = max(current.count, minimum.count)
-        let paddedCurrent = current + Array(repeating: 0, count: count - current.count)
-        let paddedMinimum = minimum + Array(repeating: 0, count: count - minimum.count)
-        guard paddedCurrent.lexicographicallyPrecedes(paddedMinimum) else { return nil }
-        return "This server exposes Web API \(serverAPIVersion); full qBitX feature parity requires 2.16.2 or later. Some newer RSS and category settings may be unavailable."
+        WebAPICompatibility.message(serverAPIVersion: serverAPIVersion, isConnected: isConnected)
     }
 
     var requiresNewerWebAPIForFullParity: Bool { webAPICompatibilityMessage != nil }
-
-    private static func versionComponents(_ value: String) -> [Int]? {
-        let components = value.split(separator: ".").compactMap { Int($0) }
-        return components.count == value.split(separator: ".").count ? components : nil
-    }
 
     func preferencesData() async throws -> Data {
         guard let api else { throw TorrentStoreError.disconnected }
