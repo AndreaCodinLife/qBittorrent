@@ -333,6 +333,20 @@ actor QBittorrentAPI {
         ])
     }
 
+    func removeTrackerHostFromAllTorrents(_ host: String) async throws {
+        let data = try await request("torrents/info", query: ["includeTrackers": "true"])
+        let torrents = try JSONDecoder().decode([TorrentResponse].self, from: data)
+        let urls = Set(torrents.flatMap { $0.trackers ?? [] }.compactMap { tracker -> String? in
+            guard let trackerHost = URLComponents(string: tracker.url)?.host,
+                  trackerHost.caseInsensitiveCompare(host) == .orderedSame else { return nil }
+            return tracker.url
+        })
+        guard !urls.isEmpty else { return }
+        _ = try await request("torrents/removeTrackers", method: "POST", form: [
+            "hash": "*", "urls": urls.sorted().joined(separator: "|")
+        ])
+    }
+
     func addWebSeed(hash: String, url: String) async throws {
         _ = try await request("torrents/addWebSeeds", method: "POST", form: ["hash": hash, "urls": url])
     }

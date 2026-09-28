@@ -120,6 +120,8 @@ struct ContentView: View {
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
     @AppStorage("qBitX.hideZeroValuesMode") private var hideZeroValuesMode = "always"
     @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
+    @AppStorage("qBitX.confirmRemoveAllTags") private var confirmRemoveAllTags = true
+    @AppStorage("qBitX.confirmRemoveTrackerFromAllTorrents") private var confirmRemoveTrackerFromAllTorrents = true
     @AppStorage("qBitX.startMinimized") private var startMinimized = false
     @AppStorage("qBitX.alternatingTransferRows") private var alternatingTransferRows = true
     @AppStorage("qBitX.colorTransfersByState") private var colorTransfersByState = true
@@ -173,6 +175,8 @@ struct ContentView: View {
     @State private var pendingTorrentFile: PendingTorrentFile?
     @State private var showsRemoveConfirmation = false
     @State private var showsClearTagsConfirmation = false
+    @State private var recheckConfirmationHashes: [String]?
+    @State private var trackerHostRemovalConfirmation: String?
     @State private var automaticManagementConfirmationHashes: [String]?
     @State private var clearTagsHashes: [String] = []
     @State private var showsConnectionSettings = false
@@ -427,7 +431,7 @@ struct ContentView: View {
             startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
             stopSelected: { runBulkAction { try await store.command(.stop, hashes: $0) } },
             forceStartSelected: { runBulkAction { try await store.setForceStart(true, hashes: $0) } },
-            recheckSelected: { runBulkAction { try await store.command(.recheck, hashes: $0) } },
+            recheckSelected: { requestTorrentRecheck(hashes: selectedHashes) },
             moveSelectedToTop: { runBulkAction { try await store.command(.topPrio, hashes: $0) } },
             moveSelectedUp: { runBulkAction { try await store.command(.increasePrio, hashes: $0) } },
             moveSelectedDown: { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } },
@@ -522,9 +526,37 @@ struct ContentView: View {
         }
         .confirmationDialog("Remove all tags from selected torrents?", isPresented: $showsClearTagsConfirmation) {
             Button("Remove All Tags", role: .destructive) {
-                runBulkAction(hashes: clearTagsHashes) { try await store.removeTorrentTags([], hashes: $0) }
+                removeAllTags(from: clearTagsHashes)
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Recheck selected torrents?", isPresented: Binding(
+            get: { recheckConfirmationHashes != nil },
+            set: { if !$0 { recheckConfirmationHashes = nil } }
+        ), titleVisibility: .visible) {
+            Button("Recheck") {
+                guard let hashes = recheckConfirmationHashes else { return }
+                recheckConfirmationHashes = nil
+                runBulkAction(hashes: hashes) { try await store.command(.recheck, hashes: $0) }
+            }
+            Button("Cancel", role: .cancel) { recheckConfirmationHashes = nil }
+        } message: {
+            Text("Are you sure you want to recheck the selected torrents?")
+        }
+        .confirmationDialog("Remove tracker from all torrents?", isPresented: Binding(
+            get: { trackerHostRemovalConfirmation != nil },
+            set: { if !$0 { trackerHostRemovalConfirmation = nil } }
+        ), titleVisibility: .visible) {
+            Button("Remove Tracker", role: .destructive) {
+                removePendingTrackerHost()
+            }
+            Button("Remove Tracker and Don’t Ask Again", role: .destructive) {
+                confirmRemoveTrackerFromAllTorrents = false
+                removePendingTrackerHost()
+            }
+            Button("Cancel", role: .cancel) { trackerHostRemovalConfirmation = nil }
+        } message: {
+            Text("Remove all announce URLs for \(trackerHostRemovalConfirmation ?? "this tracker") from every torrent?")
         }
         .confirmationDialog("Enable Automatic Torrent Management?", isPresented: Binding(
             get: { automaticManagementConfirmationHashes != nil },
@@ -975,7 +1007,13 @@ struct ContentView: View {
                             categoryFilter = nil
                             tagFilter = nil
                         }
-                        .contextMenu { torrentFilterActions(hashes: torrents.filter { $0.trackerHosts.contains(trackerHost) }.map(\.id)) }
+                        .contextMenu {
+                            Button("Remove Tracker from All Torrents", role: .destructive) {
+                                requestTrackerHostRemoval(trackerHost)
+                            }
+                            Divider()
+                            torrentFilterActions(hashes: torrents.filter { $0.trackerHosts.contains(trackerHost) }.map(\.id))
+                        }
                     }
                 }
             }
@@ -1961,8 +1999,7 @@ struct ContentView: View {
         Menu("Tags") {
             Button("Add or Edit Tags…") { beginTextAction(.tags, target: target) }
             Button("Remove All Tags…", role: .destructive) {
-                clearTagsHashes = hashes
-                showsClearTagsConfirmation = true
+                requestRemoveAllTags(hashes: hashes)
             }
             Divider()
             ForEach(allFilterTags, id: \.self) { tag in
@@ -2000,7 +2037,7 @@ struct ContentView: View {
         }
         Divider()
         if oneHasMetadata {
-            Button("Force Recheck") { runBulkAction(hashes: hashes) { try await store.command(.recheck, hashes: $0) } }
+            Button("Force Recheck") { requestTorrentRecheck(hashes: hashes) }
         }
         Button("Force Reannounce") { runBulkAction(hashes: hashes) { try await store.command(.reannounce, hashes: $0) } }
             .disabled(!canReannounce)
@@ -2074,6 +2111,61 @@ struct ContentView: View {
     private func setFirstLastPiecePriority(_ enabled: Bool, torrents: [Torrent]) {
         let hashes = torrents.filter { $0.firstLastPiecePriority != enabled }.map(\.id)
         runBulkAction(hashes: hashes) { try await store.command(.toggleFirstLastPiecePrio, hashes: $0) }
+    }
+
+    private func requestTorrentRecheck(hashes: [String]) {
+        guard !hashes.isEmpty else { return }
+        Task {
+            do {
+                if try await store.shouldConfirmTorrentRecheck() {
+                    recheckConfirmationHashes = hashes
+                } else {
+                    try await store.command(.recheck, hashes: hashes)
+                }
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
+    private func requestRemoveAllTags(hashes: [String]) {
+        guard !hashes.isEmpty else { return }
+        clearTagsHashes = hashes
+        if confirmRemoveAllTags {
+            showsClearTagsConfirmation = true
+        } else {
+            removeAllTags(from: hashes)
+        }
+    }
+
+    private func removeAllTags(from hashes: [String]) {
+        runBulkAction(hashes: hashes) { try await store.removeTorrentTags([], hashes: $0) }
+    }
+
+    private func requestTrackerHostRemoval(_ host: String) {
+        guard !host.isEmpty else { return }
+        if confirmRemoveTrackerFromAllTorrents {
+            trackerHostRemovalConfirmation = host
+        } else {
+            removeTrackerHostFromAllTorrents(host)
+        }
+    }
+
+    private func removePendingTrackerHost() {
+        guard let host = trackerHostRemovalConfirmation else { return }
+        trackerHostRemovalConfirmation = nil
+        removeTrackerHostFromAllTorrents(host)
+    }
+
+    private func removeTrackerHostFromAllTorrents(_ host: String) {
+        Task {
+            do {
+                try await store.removeTrackerHostFromAllTorrents(host)
+                if trackerFilter == host { trackerFilter = nil }
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
     }
 
     private func beginTextAction(_ action: TorrentTextAction, target: Set<String>) {

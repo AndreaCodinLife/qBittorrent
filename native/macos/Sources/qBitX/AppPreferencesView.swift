@@ -34,6 +34,8 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.notifySearchComplete") private var notifyOnSearchComplete = true
     @AppStorage("qBitX.startMinimized") private var startMinimized = false
     @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
+    @AppStorage("qBitX.confirmRemoveAllTags") private var confirmRemoveAllTags = true
+    @AppStorage("qBitX.confirmRemoveTrackerFromAllTorrents") private var confirmRemoveTrackerFromAllTorrents = true
     @AppStorage("qBitX.recursiveDownloadEnabled") private var recursiveDownloadEnabled = true
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
     @AppStorage("qBitX.hideZeroValuesMode") private var hideZeroValuesMode = "always"
@@ -68,6 +70,8 @@ struct AppPreferencesView: View {
                         }
                     }
                     Toggle("Confirm before removing torrents", isOn: $confirmTorrentDeletion)
+                    Toggle("Confirm before removing all tags", isOn: $confirmRemoveAllTags)
+                    Toggle("Confirm before removing a tracker from all torrents", isOn: $confirmRemoveTrackerFromAllTorrents)
                     Toggle("Use alternating row colors", isOn: $alternatingTransferRows)
                     Toggle("Use different text colors by torrent state", isOn: $colorTransfersByState)
                     Toggle("Make progress bars follow state colors", isOn: $progressBarFollowsStateColor)

@@ -117,6 +117,14 @@ final class TorrentStore {
         return try await api.preferencesData()
     }
 
+    func shouldConfirmTorrentRecheck() async throws -> Bool {
+        let data = try await preferencesData()
+        guard let preferences = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.badResponse
+        }
+        return preferences["confirm_torrent_recheck"] as? Bool ?? true
+    }
+
     func defaultTorrentAddOptions() async throws -> TorrentAddOptions {
         let data = try await preferencesData()
         guard let preferences = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -529,6 +537,13 @@ final class TorrentStore {
     func removeTrackers(hashes: [String], urls: [String]) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.removeTrackers(hashes: hashes, urls: urls)
+    }
+
+    func removeTrackerHostFromAllTorrents(_ host: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeTrackerHostFromAllTorrents(host)
+        trackerSummaryRefreshedAt = nil
+        await refresh()
     }
 
     func addWebSeed(hash: String, url: String) async throws {
