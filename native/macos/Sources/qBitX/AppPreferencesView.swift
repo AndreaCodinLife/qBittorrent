@@ -91,10 +91,13 @@ struct AppPreferencesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("Import a qBittorrent theme folder’s config.json. qBitX applies its supported colors to native controls; Qt stylesheets and custom icons cannot be used by the SwiftUI interface.")
+                        Text("Import config.json or a compiled .qbtheme file. qBitX applies supported colors to native controls; Qt stylesheets and custom icons cannot be used by the SwiftUI interface.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Text("Only import compiled themes from sources you trust.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Transfer List") {
@@ -297,18 +300,26 @@ struct AppPreferencesView: View {
         let panel = NSOpenPanel()
         panel.title = "Import qBittorrent Theme Colors"
         panel.prompt = "Import"
-        panel.allowedContentTypes = [.json]
+        var allowedContentTypes: [UTType] = [.json]
+        if let compiledThemeType = UTType(filenameExtension: "qbtheme", conformingTo: .data) {
+            allowedContentTypes.append(compiledThemeType)
+        }
+        panel.allowedContentTypes = allowedContentTypes
         panel.allowsOtherFileTypes = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let palette = try QBitXThemePalette(contentsOf: url)
-            themePaletteJSON = try palette.storedJSON()
-            themeName = url.deletingLastPathComponent().lastPathComponent
-        } catch {
-            themeImportError = error.localizedDescription
+        Task {
+            do {
+                let palette = try await QBitXThemeFileImporter.palette(from: url)
+                themePaletteJSON = try palette.storedJSON()
+                themeName = url.pathExtension.lowercased() == "json"
+                    ? url.deletingLastPathComponent().lastPathComponent
+                    : url.deletingPathExtension().lastPathComponent
+            } catch {
+                themeImportError = error.localizedDescription
+            }
         }
     }
 }

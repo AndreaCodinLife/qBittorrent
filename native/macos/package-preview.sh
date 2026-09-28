@@ -10,6 +10,14 @@ cmake -S "$repo_dir" -B "$repo_dir/build/nox" -G Ninja \
     -DQT_NO_PRIVATE_MODULE_WARNING=ON
 cmake --build "$repo_dir/build/nox" -j 8
 
+theme_extractor_build_dir="$repo_dir/build/qbitx-theme-extractor"
+cmake -S "$package_dir/ThemeExtractor" -B "$theme_extractor_build_dir" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+cmake --build "$theme_extractor_build_dir"
+rcc_path="$(brew --prefix qtbase)/share/qt/libexec/rcc"
+"$package_dir/scripts/test-qbtheme-extractor.sh" \
+    "$theme_extractor_build_dir/qbitx-qbtheme-extractor" "$rcc_path"
+
 swift build -c release --product qBitX
 swift build -c release --product qBitXWidget
 
@@ -44,6 +52,7 @@ cp "$repo_dir/dist/mac/qbittorrent_mac.icns" "$app_dir/Contents/Resources/qBitX.
 
 helper_dir="$app_dir/Contents/Helpers/qbittorrent-nox.app"
 mkdir -p "$app_dir/Contents/Helpers"
+cp "$theme_extractor_build_dir/qbitx-qbtheme-extractor" "$app_dir/Contents/Helpers/"
 ditto --norsrc --noextattr "$repo_dir/build/nox/qbittorrent-nox.app" "$helper_dir"
 qt_plugins="$(brew --prefix qtbase)/share/qt/plugins"
 mkdir -p "$helper_dir/Contents/PlugIns/tls" "$helper_dir/Contents/PlugIns/sqldrivers"
@@ -201,6 +210,7 @@ python3 "$package_dir/scripts/generate-translations.py" "$repo_dir" "$app_dir/Co
 xattr -cr "$app_dir"
 if [ -n "$app_group_identifier" ]; then
     codesign --force --deep --sign "$signing_identity" "$helper_dir"
+    codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/qbitx-qbtheme-extractor"
     codesign --force --sign "$signing_identity" \
         --entitlements "$staging_root/qBitX-widget.entitlements" \
         --identifier "${app_bundle_identifier}.widget" "$widget_dir"
