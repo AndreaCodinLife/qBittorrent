@@ -4,6 +4,7 @@ struct ContentLayoutEditorTarget: Identifiable {
     let id = UUID()
     let hash: String
     let torrentName: String
+    let initialFileIDs: Set<Int>?
 }
 
 struct TorrentContentLayoutEditor: View {
@@ -11,6 +12,7 @@ struct TorrentContentLayoutEditor: View {
     let store: TorrentStore
     let hash: String
     let torrentName: String
+    let initialFileIDs: Set<Int>?
 
     @State private var files: [TorrentFile] = []
     @State private var selectedFileIDs: Set<Int> = []
@@ -230,7 +232,11 @@ struct TorrentContentLayoutEditor: View {
     private func loadFiles() async {
         do {
             files = try await store.files(for: hash).sorted { $0.index < $1.index }
-            if let first = files.first {
+            let initialSelection = Set(files.map(\.index)).intersection(initialFileIDs ?? [])
+            if !initialSelection.isEmpty {
+                selectedFileIDs = initialSelection
+                refreshCommonPath()
+            } else if let first = files.first {
                 selectedFileIDs = [first.index]
                 refreshCommonPath()
             }

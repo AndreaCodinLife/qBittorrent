@@ -466,6 +466,9 @@ struct ContentView: View {
     private var filteredContentNodeIDs: Set<String> {
         Set(filteredContentRows.flatMap(\.flattened).map(\.id))
     }
+    private var sortedFilteredContentRows: [TorrentContentRow] {
+        sortContentRows(filteredContentRows)
+    }
     private var selectedFileIDs: Set<Int> {
         filteredContentRows.flatMap(\.flattened)
             .filter { selectedContentNodeIDs.contains($0.id) }
@@ -478,6 +481,12 @@ struct ContentView: View {
 
     private func deselectFilteredContent() {
         selectedContentNodeIDs.subtract(filteredContentNodeIDs)
+    }
+
+    private func sortContentRows(_ rows: [TorrentContentRow]) -> [TorrentContentRow] {
+        rows.sorted(using: contentSortOrder).map { row in
+            TorrentContentRow(id: row.id, name: row.name, path: row.path, file: row.file, children: row.children.map(sortContentRows))
+        }
     }
 
     private var appColorSchemePreference: ColorScheme? {
@@ -692,7 +701,7 @@ struct ContentView: View {
         .sheet(item: $torrentOptionsTarget) { target in TorrentOptionsView(store: store, hashes: target.hashes) }
         .sheet(item: $trackerBatchEditorTarget) { target in TrackerBatchEditor(store: store, hashes: target.hashes) }
         .sheet(item: $contentLayoutEditorTarget) { target in
-            TorrentContentLayoutEditor(store: store, hash: target.hash, torrentName: target.torrentName)
+            TorrentContentLayoutEditor(store: store, hash: target.hash, torrentName: target.torrentName, initialFileIDs: target.initialFileIDs)
         }
         .sheet(item: $previewTorrent, onDismiss: presentNextPreview) { torrent in
             TorrentPreviewView(torrent: torrent, store: store) { url in NSWorkspace.shared.open(url) }
@@ -1787,6 +1796,16 @@ struct ContentView: View {
             HStack {
                 Text("Trackers").font(.caption.weight(.semibold))
                 Spacer()
+                Button { moveSelectedTrackers(by: -1) } label: { Image(systemName: "arrow.up") }
+                    .buttonStyle(.glass)
+                    .disabled(selectedTrackerParents.isEmpty || selectedTrackerParents.allSatisfy { $0.tierSortValue == 0 })
+                    .help("Move selected trackers up one tier")
+                    .accessibilityLabel("Move selected trackers up one tier")
+                Button { moveSelectedTrackers(by: 1) } label: { Image(systemName: "arrow.down") }
+                    .buttonStyle(.glass)
+                    .disabled(selectedTrackerParents.isEmpty)
+                    .help("Move selected trackers down one tier")
+                    .accessibilityLabel("Move selected trackers down one tier")
                 Button { showDetailInput(.addTracker, title: "Add Tracker", hint: "Tracker URL") } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
                     .help("Add tracker")
@@ -1805,6 +1824,21 @@ struct ContentView: View {
                     trackerContextMenu(for: target)
                 }
                 .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
+                .background {
+                    VStack(spacing: 0) {
+                        Button("Edit Selected Tracker", action: editSelectedTracker)
+                            .keyboardShortcut(KeyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: []))
+                            .hidden()
+                        Button("Remove Selected Trackers", action: removeSelectedTrackerRows)
+                            .keyboardShortcut(.delete)
+                            .hidden()
+                        Button("Copy Selected Tracker URLs", action: copySelectedTrackerURLs)
+                            .keyboardShortcut("c", modifiers: .command)
+                            .hidden()
+                    }
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
             }
         }
     }
@@ -1819,6 +1853,50 @@ struct ContentView: View {
         }
     }
     private var allTrackerRows: [TrackerTableRow] { trackerRows.flatMap(\.flattened) }
+    private var selectedTrackerRows: [TrackerTableRow] { allTrackerRows.filter { selectedTrackerRowIDs.contains($0.id) } }
+    private var selectedTrackerParents: [TrackerTableRow] {
+        selectedTrackerRows.filter { $0.endpoint == nil && $0.tierSortValue >= 0 }
+    }
+
+    private func editSelectedTracker() {
+        guard selectedTrackerParents.count == 1, let row = selectedTrackerParents.first else { return }
+        showDetailInput(.editTracker(row.tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: row.tracker.url)
+    }
+
+    private func moveSelectedTrackers(by offset: Int) {
+        moveTrackers(selectedTrackerParents, by: offset)
+    }
+
+    private func moveTrackers(_ selected: [TrackerTableRow], by offset: Int) {
+        guard !selected.isEmpty else { return }
+        Task {
+            await performDetailAction { hash in
+                for row in selected {
+                    let currentTier = row.tierSortValue
+                    let tier = max(0, currentTier + offset)
+                    guard tier != currentTier else { continue }
+                    try await store.moveTracker(hash: hash, url: row.tracker.url, tier: tier)
+                }
+            }
+        }
+    }
+
+    private func removeSelectedTrackerRows() {
+        let urls = selectedTrackerParents.map { $0.tracker.url }
+        guard !urls.isEmpty, let hash = selectedTorrentID else { return }
+        Task {
+            do {
+                try await store.removeTrackers(hashes: [hash], urls: urls)
+                await loadDetails()
+            } catch { actionError = error.localizedDescription }
+        }
+    }
+
+    private func copySelectedTrackerURLs() {
+        let urls = selectedTrackerRows.map(\.urlSortValue).filter { !$0.isEmpty }
+        guard !urls.isEmpty else { return }
+        copyToPasteboard(urls.joined(separator: "\n"))
+    }
 
     @TableColumnBuilder<TrackerTableRow, KeyPathComparator<TrackerTableRow>>
     private var trackerPrimaryColumns: some TableColumnContent<TrackerTableRow, KeyPathComparator<TrackerTableRow>> {
@@ -1890,6 +1968,11 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        if !selectedTrackers.isEmpty {
+            Button("Move Up One Tier") { moveTrackers(selectedTrackers, by: -1) }
+                .disabled(selectedTrackers.allSatisfy { $0.tierSortValue == 0 })
+            Button("Move Down One Tier") { moveTrackers(selectedTrackers, by: 1) }
         }
         Button(selectedTrackers.count > 1 ? "Remove Trackers" : "Remove Tracker", role: .destructive) {
             guard let hash = selectedTorrentID else { return }
@@ -1969,7 +2052,14 @@ struct ContentView: View {
                     .disabled(files.isEmpty)
                 Button("Select None", action: deselectFilteredContent)
                     .disabled(selectedContentNodeIDs.isDisjoint(with: filteredContentNodeIDs))
-                Menu("Priority") { filePriorityActions(for: selectedFileIDs) }
+                Menu("Priority") {
+                    filePriorityActions(for: selectedFileIDs)
+                    Divider()
+                    Button("By Shown File Order") {
+                        let selectedRows = sortedFilteredContentRows.flatMap(\.flattened).filter { selectedContentNodeIDs.contains($0.id) }
+                        applyPriorityByShownOrder(to: selectedRows)
+                    }
+                }
                     .disabled(selectedFileIDs.isEmpty)
             }
             .padding(.horizontal, 14)
@@ -1984,6 +2074,18 @@ struct ContentView: View {
                     contentFileContextMenu(for: target)
                 }
                 .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
+                .background {
+                    VStack(spacing: 0) {
+                        Button("Open Selected Content", action: openSelectedContentRow)
+                            .keyboardShortcut(.return)
+                            .hidden()
+                        Button("Rename Selected Content", action: renameSelectedContent)
+                            .keyboardShortcut(KeyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)), modifiers: []))
+                            .hidden()
+                    }
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
             }
         }
     }
@@ -2003,7 +2105,13 @@ struct ContentView: View {
         .width(min: 70, ideal: 85)
         .customizationID("content.progress")
         TableColumn("Download Priority", value: \.prioritySortValue) { row in
-            Text(row.prioritySortValue < 0 ? "Mixed" : filePriorityLabel(row.prioritySortValue)).foregroundStyle(.secondary)
+            Menu {
+                filePriorityActions(for: row.fileIDs)
+            } label: {
+                Text(row.prioritySortValue < 0 ? "Mixed" : filePriorityLabel(row.prioritySortValue))
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(row.fileIDs.isEmpty)
         }
         .width(min: 90, ideal: 110)
         .customizationID("content.priority")
@@ -2025,6 +2133,9 @@ struct ContentView: View {
             Label(row.name, systemImage: "folder")
                 .lineLimit(1)
                 .help(row.path)
+                .onTapGesture(count: 2) {
+                    if let torrent = selectedTorrent { openTorrentContentRow(row, in: torrent) }
+                }
         } else if let file = row.file, dragContentFiles,
            store.usesBundledBackend,
            let torrent = selectedTorrent,
@@ -2032,30 +2143,89 @@ struct ContentView: View {
             Text(file.name)
                 .lineLimit(1)
                 .help(file.name)
-                .onTapGesture(count: 2) { openTorrentFile(file, in: torrent) }
+                .onTapGesture(count: 2) { openTorrentContentRow(row, in: torrent) }
                 .draggable(torrentFileURL(file, in: torrent))
         } else if let file = row.file {
             Text(file.name)
                 .lineLimit(1)
                 .help(file.name)
                 .onTapGesture(count: 2) {
-                    if let torrent = selectedTorrent { openTorrentFile(file, in: torrent) }
+                    if let torrent = selectedTorrent { openTorrentContentRow(row, in: torrent) }
                 }
         }
     }
 
     @ViewBuilder
     private func contentFileContextMenu(for target: Set<String>) -> some View {
-        let selected = filteredContentRows.flatMap(\.flattened).filter { target.contains($0.id) }
+        let selected = sortedFilteredContentRows.flatMap(\.flattened).filter { target.contains($0.id) }
         let selectedFileIDs = selected.reduce(into: Set<Int>()) { $0.formUnion($1.fileIDs) }
-        if selected.count == 1, let row = selected.first, let file = row.file, let torrent = selectedTorrent, isPreviewable(file) {
-            Button("Preview File") { openTorrentFile(file, in: torrent) }
-                .disabled(!torrentFileExists(file, in: torrent))
+        if !selected.isEmpty, let torrent = selectedTorrent {
+            if selected.count == 1, let row = selected.first {
+                if store.usesBundledBackend {
+                    Button("Open") { openTorrentContentRow(row, in: torrent) }
+                        .disabled(!torrentContentExists(row, in: torrent))
+                    Button("Open Containing Folder") { openTorrentContentContainingFolder(row, in: torrent) }
+                        .disabled(!torrentContentExists(row, in: torrent))
+                }
+                Button("Copy Path") { copyToPasteboard(torrentContentPath(row.path, in: torrent)) }
+                    .disabled(torrent.savePath.isEmpty)
+                if let file = row.file, isPreviewable(file) {
+                    Button("Preview File") { openTorrentFile(file, in: torrent) }
+                        .disabled(!torrentFileExists(file, in: torrent))
+                }
+                if let file = row.file {
+                    Button("Rename…") {
+                        showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent)
+                    }
+                }
+            }
+            Button("Batch Rename…") { openContentLayoutEditor(for: torrent, fileIDs: selectedFileIDs) }
+                .disabled(selectedFileIDs.isEmpty)
+            Menu("Priority") {
+                filePriorityActions(for: selectedFileIDs)
+                Divider()
+                Button("By Shown File Order") { applyPriorityByShownOrder(to: selected) }
+            }
         }
-        filePriorityActions(for: selectedFileIDs)
-        if selected.count == 1, let row = selected.first, let file = row.file {
-            Button("Rename…") {
-                showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent)
+    }
+
+    private func openSelectedContentRow() {
+        let selected = sortedFilteredContentRows.flatMap(\.flattened).filter { selectedContentNodeIDs.contains($0.id) }
+        guard selected.count == 1, let row = selected.first, let torrent = selectedTorrent else { return }
+        openTorrentContentRow(row, in: torrent)
+    }
+
+    private func renameSelectedContent() {
+        let selected = sortedFilteredContentRows.flatMap(\.flattened).filter { selectedContentNodeIDs.contains($0.id) }
+        guard !selected.isEmpty, let torrent = selectedTorrent else { return }
+        let fileIDs = selected.reduce(into: Set<Int>()) { $0.formUnion($1.fileIDs) }
+        if selected.count == 1, let file = selected.first?.file {
+            showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent)
+        } else {
+            openContentLayoutEditor(for: torrent, fileIDs: fileIDs)
+        }
+    }
+
+    private func applyPriorityByShownOrder(to rows: [TorrentContentRow]) {
+        guard !rows.isEmpty else { return }
+        let groupSize = max(rows.count / 3, 1)
+        var prioritiesByFileID: [Int: Int] = [:]
+        for (index, row) in rows.enumerated() {
+            let priority = switch index / groupSize {
+            case 0: 7
+            case 1: 6
+            default: 1
+            }
+            for fileID in row.fileIDs { prioritiesByFileID[fileID] = priority }
+        }
+        guard !prioritiesByFileID.isEmpty else { return }
+        Task {
+            await performDetailAction { hash in
+                for priority in [7, 6, 1] {
+                    let indices = prioritiesByFileID.compactMap { $0.value == priority ? $0.key : nil }.sorted()
+                    guard !indices.isEmpty else { continue }
+                    try await store.setFilePriority(hash: hash, indices: indices, priority: priority)
+                }
             }
         }
     }
@@ -2610,12 +2780,12 @@ struct ContentView: View {
         detailInput = DetailInput(hash: hash, operation: operation, title: title, hint: hint, initialValue: initialValue)
     }
 
-    private func openContentLayoutEditor(for torrent: Torrent?) {
+    private func openContentLayoutEditor(for torrent: Torrent?, fileIDs: Set<Int>? = nil) {
         guard let torrent else { return }
         selectedTorrentIDs = [torrent.id]
         showDetailPane = true
         detailTab = .content
-        contentLayoutEditorTarget = ContentLayoutEditorTarget(hash: torrent.id, torrentName: torrent.name)
+        contentLayoutEditorTarget = ContentLayoutEditorTarget(hash: torrent.id, torrentName: torrent.name, initialFileIDs: fileIDs)
     }
 
     private func applyDetailInput(_ input: DetailInput, value: String) async throws {
@@ -3066,6 +3236,40 @@ struct ContentView: View {
 
     private func torrentFileURL(_ file: TorrentFile, in torrent: Torrent) -> URL {
         URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: file.name)
+    }
+
+    private func torrentContentURL(_ row: TorrentContentRow, in torrent: Torrent) -> URL {
+        URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: row.path)
+    }
+
+    private func torrentContentPath(_ relativePath: String, in torrent: Torrent) -> String {
+        let root = torrent.savePath
+        guard !root.isEmpty else { return relativePath }
+        let separator = root.contains("\\") && !root.contains("/") ? "\\" : "/"
+        let childPath = relativePath.replacingOccurrences(of: "/", with: separator)
+        if root.hasSuffix("/") || root.hasSuffix("\\") { return root + childPath }
+        return root + separator + childPath
+    }
+
+    private func torrentContentExists(_ row: TorrentContentRow, in torrent: Torrent) -> Bool {
+        FileManager.default.fileExists(atPath: torrentContentURL(row, in: torrent).path)
+    }
+
+    private func openTorrentContentRow(_ row: TorrentContentRow, in torrent: Torrent) {
+        guard store.usesBundledBackend else {
+            actionError = "Files belong to the remote server and cannot be opened in Mac apps."
+            return
+        }
+        let url = torrentContentURL(row, in: torrent)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openTorrentContentContainingFolder(_ row: TorrentContentRow, in torrent: Torrent) {
+        guard store.usesBundledBackend else { return }
+        let url = torrentContentURL(row, in: torrent)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func torrentFileExists(_ file: TorrentFile, in torrent: Torrent) -> Bool {
