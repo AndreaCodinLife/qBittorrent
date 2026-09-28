@@ -239,8 +239,10 @@ struct SearchPane: View {
             }
             if enabledPlugins.isEmpty {
                 ContentUnavailableView("No Search Plugins", systemImage: "puzzlepiece", description: Text("Use Plugins to install or enable a search engine."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedSearchTab?.results.isEmpty != false {
                 ContentUnavailableView(selectedSearchTab == nil ? "Search Torrents" : selectedSearchTab?.status == "Running" ? "Searching…" : "No Results", systemImage: "magnifyingglass", description: Text(selectedSearchTab == nil ? "Search with the enabled qBittorrent plugins." : "Try a different search."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 0) {
                     VStack(spacing: 8) {
@@ -336,6 +338,7 @@ struct SearchPane: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: store.isConnected) {
             guard store.isConnected else { return }
             do { plugins = try await store.searchPlugins() }
