@@ -99,6 +99,7 @@ struct RSSPane: View {
                 Divider()
                 if let errorMessage {
                     ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let feed = selectedFeed {
                     TextField("Filter articles…", text: $articleFilter)
                         .textFieldStyle(.roundedBorder)
@@ -106,6 +107,7 @@ struct RSSPane: View {
                         .padding(10)
                     if visibleArticles.isEmpty {
                         ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("This feed has no articles."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         List(visibleArticles) { article in
                             HStack(spacing: 12) {
@@ -140,10 +142,13 @@ struct RSSPane: View {
                     }
                 } else {
                     ContentUnavailableView("No Feed Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Select a feed or add a new one."))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(minWidth: 350)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: store.isConnected) { if store.isConnected { await reload() } }
         .confirmationDialog("Remove this RSS feed?", isPresented: $showsRemoveFeed) {
             Button("Remove Feed", role: .destructive) {
