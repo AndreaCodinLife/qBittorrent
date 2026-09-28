@@ -12,7 +12,10 @@ cmake --build "$repo_dir/build/nox" -j 8
 
 swift build -c release
 
-app_dir="$package_dir/build/qBitX.app"
+preview_root="${TMPDIR:-/tmp}/qbitx-preview-${UID}"
+mkdir -p "$preview_root"
+staging_root="$(mktemp -d "$preview_root/package.XXXXXX")"
+app_dir="$staging_root/qBitX.app"
 mkdir -p "$app_dir/Contents/MacOS"
 cp "$package_dir/.build/release/qBitX" "$app_dir/Contents/MacOS/qBitX"
 mkdir -p "$app_dir/Contents/Resources"
@@ -20,11 +23,7 @@ cp "$repo_dir/dist/mac/qbittorrent_mac.icns" "$app_dir/Contents/Resources/qBitX.
 
 helper_dir="$app_dir/Contents/Helpers/qbittorrent-nox.app"
 mkdir -p "$app_dir/Contents/Helpers"
-if [ -d "$helper_dir" ]; then
-    backup_dir="$(mktemp -d "$package_dir/build/helper-backup.XXXXXX")"
-    mv "$helper_dir" "$backup_dir/"
-fi
-ditto "$repo_dir/build/nox/qbittorrent-nox.app" "$helper_dir"
+ditto --norsrc --noextattr "$repo_dir/build/nox/qbittorrent-nox.app" "$helper_dir"
 qt_plugins="$(brew --prefix qtbase)/share/qt/plugins"
 mkdir -p "$helper_dir/Contents/PlugIns/tls" "$helper_dir/Contents/PlugIns/sqldrivers"
 cp "$qt_plugins/tls/libqopensslbackend.dylib" "$helper_dir/Contents/PlugIns/tls/"
@@ -53,6 +52,50 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array><string>torrent</string></array>
+            <key>CFBundleTypeName</key>
+            <string>BitTorrent Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array><string>org.bittorrent.torrent</string></array>
+        </dict>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLName</key>
+            <string>BitTorrent Magnet URL</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>magnet</string></array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string><string>public.item</string></array>
+            <key>UTTypeDescription</key>
+            <string>BitTorrent Document</string>
+            <key>UTTypeIdentifier</key>
+            <string>org.bittorrent.torrent</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>torrent</string></array>
+                <key>public.mime-type</key>
+                <array><string>application/x-bittorrent</string></array>
+            </dict>
+        </dict>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
     <key>NSAppleEventsUsageDescription</key>
@@ -65,4 +108,17 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-echo "$app_dir"
+# The workspace may be hosted in a File Provider directory, which adds Finder
+# metadata that codesign rejects on nested Qt bundles. This is a generated app
+# bundle, so clear its filesystem metadata before making a local ad-hoc signature.
+xattr -cr "$app_dir"
+codesign --force --deep --sign - --identifier life.andreacodin.qbitx.preview "$app_dir"
+codesign --verify --strict --verbose=2 "$app_dir"
+
+output_app="$preview_root/qBitX.app"
+if [ -e "$output_app" ]; then
+    mv "$output_app" "$preview_root/qBitX.previous.$(date +%Y%m%d-%H%M%S).app"
+fi
+mv "$app_dir" "$output_app"
+rmdir "$staging_root"
+echo "$output_app"

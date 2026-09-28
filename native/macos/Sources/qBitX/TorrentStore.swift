@@ -22,6 +22,17 @@ final class TorrentStore {
     private let backend = BundledBackend()
     private var api: QBittorrentAPI?
     private var trackerSummaryRefreshedAt: Date?
+    @ObservationIgnored private var sleepActivity: NSObjectProtocol?
+    @ObservationIgnored private var runTask: Task<Void, Never>?
+
+    func start(retrying: Bool = false) {
+        if retrying {
+            runTask?.cancel()
+            runTask = nil
+        }
+        guard runTask == nil else { return }
+        runTask = Task { await run() }
+    }
 
     func run() async {
         connectionError = nil
@@ -57,6 +68,7 @@ final class TorrentStore {
         } catch {
             connectionError = error.localizedDescription
             isConnected = false
+            updateSleepInhibition()
         }
     }
 
@@ -210,6 +222,8 @@ final class TorrentStore {
             torrents = refreshedTorrents
             transferStatus = try await newStatus
             isConnected = true
+            MacOSStatusPresentation.updateDockSpeed(transferStatus)
+            updateSleepInhibition()
             if sessionSpeedHistory.last.map({ now.timeIntervalSince($0.date) >= 2 }) ?? true {
                 sessionSpeedHistory.append(TransferSample(date: now, status: transferStatus))
             }
@@ -222,6 +236,36 @@ final class TorrentStore {
         } catch {
             connectionError = error.localizedDescription
             isConnected = false
+            updateSleepInhibition()
+        }
+    }
+
+    func updateSleepInhibition() {
+        let shouldPreventSleep = isConnected && torrents.contains { torrent in
+            if torrent.rawState == "moving" { return true }
+
+            let stoppedOrErrored = torrent.rawState.hasPrefix("stopped")
+                || torrent.rawState == "error"
+                || torrent.rawState == "missingFiles"
+            guard !stoppedOrErrored else { return false }
+
+            let downloading = UserDefaults.standard.bool(forKey: "qBitX.preventSleepWhenDownloading")
+                && torrent.progress < 1
+                && torrent.rawState != "metaDL"
+                && torrent.rawState != "forcedMetaDL"
+            let seeding = UserDefaults.standard.bool(forKey: "qBitX.preventSleepWhenSeeding")
+                && torrent.progress >= 1
+            return downloading || seeding
+        }
+
+        if shouldPreventSleep, sleepActivity == nil {
+            sleepActivity = ProcessInfo.processInfo.beginActivity(
+                options: .idleSystemSleepDisabled,
+                reason: "qBitX is managing active transfers"
+            )
+        } else if !shouldPreventSleep, let sleepActivity {
+            ProcessInfo.processInfo.endActivity(sleepActivity)
+            self.sleepActivity = nil
         }
     }
 

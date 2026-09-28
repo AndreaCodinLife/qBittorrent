@@ -70,13 +70,17 @@ private struct TorrentSort: Identifiable, Equatable {
 }
 
 struct ContentView: View {
-    @State private var store = TorrentStore()
+    @Bindable var store: TorrentStore
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
     @AppStorage("qBitX.showStatusBar") private var showStatusBar = true
     @AppStorage("qBitX.showDetailPane") private var showDetailPane = true
     @AppStorage("qBitX.showToolbar") private var showToolbar = true
     @AppStorage("qBitX.toolbarStyle") private var toolbarStyle = "system"
     @AppStorage("qBitX.showSpeedInTitleBar") private var showSpeedInTitleBar = false
+    @AppStorage("qBitX.showSpeedInDock") private var showSpeedInDock = false
+    @AppStorage("qBitX.showSpeedInMenuBar") private var showSpeedInMenuBar = false
+    @AppStorage("qBitX.preventSleepWhenDownloading") private var preventSleepWhenDownloading = false
+    @AppStorage("qBitX.preventSleepWhenSeeding") private var preventSleepWhenSeeding = false
     @AppStorage("qBitX.showTrackerStatusFilter") private var showTrackerStatusFilter = true
     @AppStorage("qBitX.separateTrackerStatusFilter") private var separateTrackerStatusFilter = false
     @AppStorage("qBitX.hideZeroStatusFilters") private var hideZeroStatusFilters = false
@@ -110,6 +114,8 @@ struct ContentView: View {
     @State private var detailTab: DetailTab = .general
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     @State private var showsURLSheet = false
+    @State private var incomingTorrentURL: String?
+    @State private var pendingExternalURLs: [URL] = []
     @State private var showsFileImporter = false
     @State private var pendingTorrentFile: PendingTorrentFile?
     @State private var showsRemoveConfirmation = false
@@ -126,6 +132,7 @@ struct ContentView: View {
     @State private var showsOrganization = false
     @State private var organizationInitialCategory: String?
     @State private var showsAbout = false
+    @State private var showsFileAssociations = false
     @State private var previewTorrent: Torrent?
     @State private var authenticationError: String?
     @State private var incompleteDownloadIDs: Set<String> = []
@@ -263,7 +270,8 @@ struct ContentView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
-        .task(id: retryID) { await store.run() }
+        .onOpenURL(perform: handleOpenURL)
+        .task(id: retryID) { store.start(retrying: retryID > 0) }
         .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }
         .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") { await loadDetails() }
         .onChange(of: torrents.map(\.id)) { _, ids in
@@ -274,7 +282,20 @@ struct ContentView: View {
         .onChange(of: showsOrganization) { wasPresented, isPresented in
             if wasPresented && !isPresented { Task { await loadFilterCatalogs() } }
         }
-        .onAppear { sidebarVisibility = showFiltersSidebar ? .all : .detailOnly; syncWindowTitle() }
+        .onChange(of: store.isConnected) { _, isConnected in
+            if isConnected { presentNextExternalURLIfReady() }
+        }
+        .onAppear {
+            sidebarVisibility = showFiltersSidebar ? .all : .detailOnly
+            syncWindowTitle()
+            MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: showSpeedInDock)
+            store.updateSleepInhibition()
+        }
+        .onChange(of: showSpeedInDock) { _, enabled in
+            MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: enabled)
+        }
+        .onChange(of: preventSleepWhenDownloading) { _, _ in store.updateSleepInhibition() }
+        .onChange(of: preventSleepWhenSeeding) { _, _ in store.updateSleepInhibition() }
         .onChange(of: showFiltersSidebar) { _, visible in sidebarVisibility = visible ? .all : .detailOnly }
         .onChange(of: "\(store.transferStatus.downloadText)|\(store.transferStatus.uploadText)|\(showSpeedInTitleBar)") { _, _ in syncWindowTitle() }
         .overlay {
@@ -311,12 +332,15 @@ struct ContentView: View {
             donate: { openURL("https://www.qbittorrent.org/donate") },
             showAbout: { showsAbout = true }
         ))
-        .sheet(isPresented: $showsURLSheet) {
-            AddTorrentSheet(file: nil, store: store) { url, downloader, options in
+        .sheet(isPresented: $showsURLSheet, onDismiss: {
+            incomingTorrentURL = nil
+            presentNextExternalURLIfReady()
+        }) {
+            AddTorrentSheet(file: nil, store: store, initialURL: incomingTorrentURL ?? "") { url, downloader, options in
                 try await store.add(url: url, downloader: downloader, options: options)
             }
         }
-        .sheet(item: $pendingTorrentFile) { file in
+        .sheet(item: $pendingTorrentFile, onDismiss: presentNextExternalURLIfReady) { file in
             AddTorrentSheet(file: file, store: store) { source, _, options in
                 if source.hasPrefix("magnet:") {
                     try await store.add(url: source, options: options)
@@ -342,6 +366,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showsOrganization) { OrganizationView(store: store, initialCategoryName: organizationInitialCategory) }
         .sheet(isPresented: $showsAbout) { AboutView(serverVersion: store.serverVersion) }
+        .sheet(isPresented: $showsFileAssociations) { FileAssociationView() }
         .sheet(item: $textAction) { action in
             ValueSheet(title: action.title, hint: action.hint, initialValue: initialValue(for: action), allowsEmpty: action == .category || action == .tags) { value in
                 try await applyTextAction(action, value: value)
@@ -523,6 +548,38 @@ struct ContentView: View {
         NSWorkspace.shared.open(url)
     }
 
+    private func handleOpenURL(_ url: URL) {
+        guard (url.isFileURL && url.pathExtension.lowercased() == "torrent")
+            || url.scheme?.lowercased() == "magnet" else {
+            actionError = "qBitX can open .torrent files and magnet links."
+            return
+        }
+        pendingExternalURLs.append(url)
+        presentNextExternalURLIfReady()
+    }
+
+    private func presentNextExternalURLIfReady() {
+        guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet else { return }
+        while !pendingExternalURLs.isEmpty {
+            let url = pendingExternalURLs.removeFirst()
+            if url.isFileURL {
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    pendingTorrentFile = PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url))
+                    return
+                } catch {
+                    actionError = error.localizedDescription
+                    continue
+                }
+            }
+
+            incomingTorrentURL = url.absoluteString
+            showsURLSheet = true
+            return
+        }
+    }
+
     private func pasteTorrentLinks() {
         guard let clipboard = NSPasteboard.general.string(forType: .string) else { return }
         let links = clipboard.components(separatedBy: .newlines)
@@ -576,6 +633,9 @@ struct ContentView: View {
                 toolbarStyleButton("below", title: "Text Under Icons")
             }
             Divider()
+            Toggle("Show Speed in Menu Bar", isOn: $showSpeedInMenuBar)
+            Toggle("Show Speed in Dock", isOn: $showSpeedInDock)
+            Divider()
             Button("Execution Log…") { showsExecutionLog = true }
             Button("Statistics…") { showsStatistics = true }
         } label: { toolbarLabel("View", image: "rectangle.split.3x1") }
@@ -593,6 +653,7 @@ struct ContentView: View {
     private var settingsToolbarMenu: some View {
         Menu {
             Button("qBittorrent Preferences…") { showsBackendPreferences = true }
+            Button("File Associations…") { showsFileAssociations = true }
             Button("Categories and Tags…") { openOrganization() }
             Button("Connection…") { showsConnectionSettings = true }
             Divider()
@@ -600,6 +661,10 @@ struct ContentView: View {
             Button("Cookies…") { showsCookies = true }
             Button("Statistics…") { showsStatistics = true }
             Button("Execution Log…") { showsExecutionLog = true }
+            Menu("Power Management") {
+                Toggle("Keep This Mac Awake While Downloading", isOn: $preventSleepWhenDownloading)
+                Toggle("Keep This Mac Awake While Seeding", isOn: $preventSleepWhenSeeding)
+            }
             Divider()
             Button(interfaceLocked ? "Unlock Interface…" : "Lock Interface") {
                 if interfaceLocked { unlockInterface() }
