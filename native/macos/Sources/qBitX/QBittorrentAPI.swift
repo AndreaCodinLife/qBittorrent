@@ -296,6 +296,12 @@ actor QBittorrentAPI {
         _ = try await request("torrents/addTrackers", method: "POST", form: ["hash": hash, "urls": url])
     }
 
+    func addTrackers(hashes: [String], entries: String) async throws {
+        _ = try await request("torrents/addTrackers", method: "POST", form: [
+            "hash": hashes.joined(separator: "|"), "urls": entries
+        ])
+    }
+
     func editTracker(hash: String, url: String, newURL: String) async throws {
         _ = try await request("torrents/editTracker", method: "POST", form: [
             "hash": hash, "url": url, "newUrl": newURL
@@ -317,6 +323,13 @@ actor QBittorrentAPI {
     func removeTracker(hash: String, url: String) async throws {
         _ = try await request("torrents/removeTrackers", method: "POST", form: [
             "hash": hash, "urls": url
+        ])
+    }
+
+    func removeTrackers(hashes: [String], urls: [String]) async throws {
+        guard !hashes.isEmpty, !urls.isEmpty else { return }
+        _ = try await request("torrents/removeTrackers", method: "POST", form: [
+            "hash": hashes.joined(separator: "|"), "urls": urls.joined(separator: "|")
         ])
     }
 

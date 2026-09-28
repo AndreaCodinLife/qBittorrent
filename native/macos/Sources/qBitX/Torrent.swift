@@ -67,6 +67,11 @@ struct Torrent: Identifiable, Sendable {
 
     func column(_ key: String) -> String { extra[key] ?? "—" }
 
+    var hasMetadata: Bool {
+        if let value = extra["has_metadata"] { return value == "Yes" }
+        return !["metaDL", "forcedMetaDL"].contains(rawState)
+    }
+
     var size: String { ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file) }
     var seedCountText: String {
         guard let totalSeeds, totalSeeds >= 0 else { return "\(seeds)" }

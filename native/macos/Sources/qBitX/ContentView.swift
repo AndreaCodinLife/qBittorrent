@@ -173,6 +173,7 @@ struct ContentView: View {
     @State private var pendingTorrentFile: PendingTorrentFile?
     @State private var showsRemoveConfirmation = false
     @State private var showsClearTagsConfirmation = false
+    @State private var automaticManagementConfirmationHashes: [String]?
     @State private var clearTagsHashes: [String] = []
     @State private var showsConnectionSettings = false
     @State private var showsAppPreferences = false
@@ -183,11 +184,14 @@ struct ContentView: View {
     @State private var showsTorrentCreator = false
     @State private var showsCookies = false
     @State private var torrentOptionsTarget: TorrentOptionsTarget?
+    @State private var trackerBatchEditorTarget: TrackerBatchEditorTarget?
+    @State private var contentLayoutEditorTarget: ContentLayoutEditorTarget?
     @State private var showsOrganization = false
     @State private var organizationInitialCategory: String?
     @State private var showsAbout = false
     @State private var showsFileAssociations = false
     @State private var previewTorrent: Torrent?
+    @State private var previewTorrentQueue: [Torrent] = []
     @State private var authenticationError: String?
     @State private var hasObservedTorrentCompletionSnapshot = false
     @State private var showsDownloadCompletionAction = false
@@ -474,7 +478,11 @@ struct ContentView: View {
         .sheet(isPresented: $showsTorrentCreator) { TorrentCreatorView(store: store) }
         .sheet(isPresented: $showsCookies) { CookiesView(store: store) }
         .sheet(item: $torrentOptionsTarget) { target in TorrentOptionsView(store: store, hashes: target.hashes) }
-        .sheet(item: $previewTorrent) { torrent in
+        .sheet(item: $trackerBatchEditorTarget) { target in TrackerBatchEditor(store: store, hashes: target.hashes) }
+        .sheet(item: $contentLayoutEditorTarget) { target in
+            TorrentContentLayoutEditor(store: store, hash: target.hash, torrentName: target.torrentName)
+        }
+        .sheet(item: $previewTorrent, onDismiss: presentNextPreview) { torrent in
             TorrentPreviewView(torrent: torrent, store: store) { url in NSWorkspace.shared.open(url) }
         }
         .sheet(isPresented: $showsOrganization) { OrganizationView(store: store, initialCategoryName: organizationInitialCategory) }
@@ -517,6 +525,19 @@ struct ContentView: View {
                 runBulkAction(hashes: clearTagsHashes) { try await store.removeTorrentTags([], hashes: $0) }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Enable Automatic Torrent Management?", isPresented: Binding(
+            get: { automaticManagementConfirmationHashes != nil },
+            set: { if !$0 { automaticManagementConfirmationHashes = nil } }
+        ), titleVisibility: .visible) {
+            Button("Enable") {
+                guard let hashes = automaticManagementConfirmationHashes else { return }
+                automaticManagementConfirmationHashes = nil
+                runBulkAction(hashes: hashes) { try await store.setAutomaticManagement(true, hashes: $0) }
+            }
+            Button("Cancel", role: .cancel) { automaticManagementConfirmationHashes = nil }
+        } message: {
+            Text("Automatic management may move the selected torrents to their category folders.")
         }
         .confirmationDialog("All downloads are complete", isPresented: $showsDownloadCompletionAction) {
             Button(downloadCompletionLabel, role: downloadCompletionAction == "shutdown" || downloadCompletionAction == "restart" ? .destructive : nil) {
@@ -1589,6 +1610,8 @@ struct ContentView: View {
             HStack {
                 Text("Content").font(.caption.weight(.semibold))
                 Spacer()
+                Button("Manage Content…") { openContentLayoutEditor(for: selectedTorrent) }
+                    .disabled(selectedTorrent == nil || selectedTorrentIDs.count != 1)
                 Button("Select All") { selectedFileIDs = Set(files.map(\.id)) }
                     .disabled(files.isEmpty)
                 Button("Select None") { selectedFileIDs = [] }
@@ -1899,16 +1922,33 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func torrentContextMenu(for target: Set<String>) -> some View {
-        let hashes = target.sorted()
-        let targetTorrent = torrents.first { target.contains($0.id) }
-        Button("Start") { runBulkAction(hashes: hashes) { try await store.command(.start, hashes: $0) } }
-        Button("Stop") { runBulkAction(hashes: hashes) { try await store.command(.stop, hashes: $0) } }
-        Toggle("Force Start", isOn: Binding(
-            get: { targetTorrent?.forceStart ?? false },
-            set: { value in runBulkAction(hashes: hashes) { try await store.setForceStart(value, hashes: $0) } }
-        ))
+        let selectedTorrents = torrents.filter { target.contains($0.id) }
+        let hashes = selectedTorrents.map(\.id)
+        let targetTorrent = selectedTorrents.first
+        let oneNotFinished = selectedTorrents.contains { $0.progress < 1 }
+        let oneHasMetadata = selectedTorrents.contains { $0.hasMetadata }
+        let needsStart = selectedTorrents.contains { $0.forceStart || [.paused, .checking, .error].contains($0.state) }
+        let needsStop = selectedTorrents.contains { ![.paused, .error].contains($0.state) || $0.state == .checking }
+        let needsForceStart = selectedTorrents.contains { !$0.forceStart || $0.state == .error || $0.rawState == "missingFiles" }
+        let canReannounce = selectedTorrents.contains {
+            ![.paused, .queued, .checking, .error].contains($0.state) && $0.rawState != "missingFiles"
+        }
+        let queueingEnabled = selectedTorrents.contains { ($0.sortNumbers["priority"] ?? -1) >= 0 }
+
+        if needsStart {
+            Button("Start") { runBulkAction(hashes: hashes) { try await store.command(.start, hashes: $0) } }
+        }
+        if needsStop {
+            Button("Stop") { runBulkAction(hashes: hashes) { try await store.command(.stop, hashes: $0) } }
+        }
+        if needsForceStart {
+            Button("Force Start") { runBulkAction(hashes: hashes) { try await store.setForceStart(true, hashes: $0) } }
+        }
         Divider()
-        Button("Rename…") { beginTextAction(.rename, target: target) }.disabled(hashes.count != 1)
+        if hashes.count == 1 {
+            Button("Rename…") { beginTextAction(.rename, target: target) }
+            Button("Manage Content…") { openContentLayoutEditor(for: targetTorrent) }
+        }
         Button("Set Location…") { beginTextAction(.location, target: target) }
         Menu("Category") {
             Button("New Category…") { openOrganization() }
@@ -1939,42 +1979,67 @@ struct ContentView: View {
                 }
             }
         }
-        Button("Manage Trackers") { detailTab = .trackers }.disabled(hashes.count != 1)
+        Button("Edit Trackers…") { trackerBatchEditorTarget = TrackerBatchEditorTarget(hashes: hashes) }
         Button("Torrent Options…") { torrentOptionsTarget = TorrentOptionsTarget(hashes: hashes) }
-        Button("Preview File…") {
-            if let targetTorrent { openPreviewOrDestination(for: targetTorrent) }
+        if oneHasMetadata {
+            Button("Preview File…") {
+                queuePreviews(for: selectedTorrents)
+            }
         }
-            .disabled(hashes.count != 1)
         Button("Open Destination Folder") {
             if let targetTorrent { openDestinationFolder(for: targetTorrent) }
         }
         .disabled(targetTorrent?.savePath.isEmpty ?? true)
-        Menu("Queue") {
-            Button("Move to Top") { runBulkAction(hashes: hashes) { try await store.command(.topPrio, hashes: $0) } }
-            Button("Move Up") { runBulkAction(hashes: hashes) { try await store.command(.increasePrio, hashes: $0) } }
-            Button("Move Down") { runBulkAction(hashes: hashes) { try await store.command(.decreasePrio, hashes: $0) } }
-            Button("Move to Bottom") { runBulkAction(hashes: hashes) { try await store.command(.bottomPrio, hashes: $0) } }
+        if queueingEnabled && oneNotFinished {
+            Menu("Queue") {
+                Button("Move to Top") { runBulkAction(hashes: hashes) { try await store.command(.topPrio, hashes: $0) } }
+                Button("Move Up") { runBulkAction(hashes: hashes) { try await store.command(.increasePrio, hashes: $0) } }
+                Button("Move Down") { runBulkAction(hashes: hashes) { try await store.command(.decreasePrio, hashes: $0) } }
+                Button("Move to Bottom") { runBulkAction(hashes: hashes) { try await store.command(.bottomPrio, hashes: $0) } }
+            }
         }
         Divider()
-        Button("Force Recheck") { runBulkAction(hashes: hashes) { try await store.command(.recheck, hashes: $0) } }
+        if oneHasMetadata {
+            Button("Force Recheck") { runBulkAction(hashes: hashes) { try await store.command(.recheck, hashes: $0) } }
+        }
         Button("Force Reannounce") { runBulkAction(hashes: hashes) { try await store.command(.reannounce, hashes: $0) } }
+            .disabled(!canReannounce)
+            .help(canReannounce ? "Force reannounce the selected torrents" : "Cannot reannounce stopped, queued, errored, or checking torrents")
         Divider()
-        Toggle("Sequential Download", isOn: Binding(
-            get: { targetTorrent?.sequentialDownload ?? false },
-            set: { _ in runBulkAction(hashes: hashes) { try await store.command(.toggleSequentialDownload, hashes: $0) } }
+        if oneNotFinished {
+            let sequentialMixed = Set(selectedTorrents.map(\.sequentialDownload)).count > 1
+            let firstLastMixed = Set(selectedTorrents.map(\.firstLastPiecePriority)).count > 1
+            Toggle(sequentialMixed ? "Sequential Download (Mixed)" : "Sequential Download", isOn: Binding(
+                get: { selectedTorrents.allSatisfy(\.sequentialDownload) },
+                set: { setSequentialDownload($0, torrents: selectedTorrents) }
+            ))
+            .help(sequentialMixed ? "Selected torrents have different sequential download settings" : "Download files in sequential order")
+            Toggle(firstLastMixed ? "First and Last Pieces First (Mixed)" : "First and Last Pieces First", isOn: Binding(
+                get: { selectedTorrents.allSatisfy(\.firstLastPiecePriority) },
+                set: { setFirstLastPiecePriority($0, torrents: selectedTorrents) }
+            ))
+            .help(firstLastMixed ? "Selected torrents have different first and last piece settings" : "Prioritize the first and last pieces")
+        }
+        let autoManagementMixed = Set(selectedTorrents.map(\.automaticManagement)).count > 1
+        Toggle(autoManagementMixed ? "Automatic Torrent Management (Mixed)" : "Automatic Torrent Management", isOn: Binding(
+            get: { selectedTorrents.allSatisfy(\.automaticManagement) },
+            set: { value in
+                if value {
+                    automaticManagementConfirmationHashes = hashes
+                } else {
+                    runBulkAction(hashes: hashes) { try await store.setAutomaticManagement(false, hashes: $0) }
+                }
+            }
         ))
-        Toggle("First and Last Pieces First", isOn: Binding(
-            get: { targetTorrent?.firstLastPiecePriority ?? false },
-            set: { _ in runBulkAction(hashes: hashes) { try await store.command(.toggleFirstLastPiecePrio, hashes: $0) } }
-        ))
-        Toggle("Automatic Torrent Management", isOn: Binding(
-            get: { targetTorrent?.automaticManagement ?? false },
-            set: { value in runBulkAction(hashes: hashes) { try await store.setAutomaticManagement(value, hashes: $0) } }
-        ))
-        Toggle("Super Seeding", isOn: Binding(
-            get: { targetTorrent?.superSeeding ?? false },
-            set: { value in runBulkAction(hashes: hashes) { try await store.setSuperSeeding(value, hashes: $0) } }
-        ))
+        .help(autoManagementMixed ? "Selected torrents have different automatic management settings" : "Use category settings to choose torrent paths")
+        if !oneNotFinished && oneHasMetadata {
+            let superSeedingMixed = Set(selectedTorrents.map(\.superSeeding)).count > 1
+            Toggle(superSeedingMixed ? "Super Seeding (Mixed)" : "Super Seeding", isOn: Binding(
+                get: { selectedTorrents.allSatisfy(\.superSeeding) },
+                set: { value in runBulkAction(hashes: hashes) { try await store.setSuperSeeding(value, hashes: $0) } }
+            ))
+            .help(superSeedingMixed ? "Selected torrents have different super seeding settings" : "Enable super seeding mode")
+        }
         Menu("Copy") {
             Button("Names") { copySelectedTorrents(\.name, target: target) }
             Button("Torrent IDs") { copySelectedTorrents(\.id, target: target) }
@@ -1982,10 +2047,12 @@ struct ContentView: View {
             Button("Content Paths") { copyContentPaths(target: target) }
             Button("Comments") { copyComments(target: target) }
             Button("Infohash v1") { copyColumn("infohash_v1", target: target) }
+                .disabled(!selectedTorrents.contains { $0.column("infohash_v1") != "—" })
             Button("Infohash v2") { copyColumn("infohash_v2", target: target) }
+                .disabled(!selectedTorrents.contains { $0.column("infohash_v2") != "—" })
             Button("Magnet Links") { copyMagnets(target: target) }
         }
-        Button("Export .torrent…") { exportSelectedTorrent(hash: hashes.first) }.disabled(hashes.count != 1)
+        Button("Export .torrent Files…") { exportSelectedTorrents(hashes: hashes) }
         Divider()
         Button("Remove…", role: .destructive) { requestRemoval(hashes: Array(target)) }
     }
@@ -1997,6 +2064,16 @@ struct ContentView: View {
             do { try await action(hashes) }
             catch { actionError = error.localizedDescription }
         }
+    }
+
+    private func setSequentialDownload(_ enabled: Bool, torrents: [Torrent]) {
+        let hashes = torrents.filter { $0.sequentialDownload != enabled }.map(\.id)
+        runBulkAction(hashes: hashes) { try await store.command(.toggleSequentialDownload, hashes: $0) }
+    }
+
+    private func setFirstLastPiecePriority(_ enabled: Bool, torrents: [Torrent]) {
+        let hashes = torrents.filter { $0.firstLastPiecePriority != enabled }.map(\.id)
+        runBulkAction(hashes: hashes) { try await store.command(.toggleFirstLastPiecePrio, hashes: $0) }
     }
 
     private func beginTextAction(_ action: TorrentTextAction, target: Set<String>) {
@@ -2054,6 +2131,14 @@ struct ContentView: View {
     private func showDetailInput(_ operation: DetailInput.Operation, title: String, hint: String, initialValue: String = "") {
         guard let hash = selectedTorrentID else { return }
         detailInput = DetailInput(hash: hash, operation: operation, title: title, hint: hint, initialValue: initialValue)
+    }
+
+    private func openContentLayoutEditor(for torrent: Torrent?) {
+        guard let torrent else { return }
+        selectedTorrentIDs = [torrent.id]
+        showDetailPane = true
+        detailTab = .content
+        contentLayoutEditorTarget = ContentLayoutEditorTarget(hash: torrent.id, torrentName: torrent.name)
     }
 
     private func applyDetailInput(_ input: DetailInput, value: String) async throws {
@@ -2406,6 +2491,45 @@ struct ContentView: View {
         }
     }
 
+    private func queuePreviews(for selectedTorrents: [Torrent]) {
+        guard store.usesBundledBackend else {
+            actionError = "Files belong to the remote server and cannot be opened in Mac apps."
+            return
+        }
+        Task {
+            var previewableTorrents: [Torrent] = []
+            var unavailableNames: [String] = []
+            for torrent in selectedTorrents {
+                guard torrent.hasMetadata else {
+                    unavailableNames.append(torrent.name)
+                    continue
+                }
+                do {
+                    let torrentFiles = try await store.files(for: torrent.id)
+                    if torrentFiles.contains(where: isPreviewable) {
+                        previewableTorrents.append(torrent)
+                    } else {
+                        unavailableNames.append(torrent.name)
+                    }
+                } catch {
+                    unavailableNames.append("\(torrent.name): \(error.localizedDescription)")
+                }
+            }
+            guard let first = previewableTorrents.first else {
+                actionError = "No selected torrent contains a previewable file.\n\(unavailableNames.joined(separator: "\n"))"
+                return
+            }
+            previewTorrentQueue = Array(previewableTorrents.dropFirst())
+            previewTorrent = first
+        }
+    }
+
+    private func presentNextPreview() {
+        guard let next = previewTorrentQueue.first else { return }
+        previewTorrentQueue.removeFirst()
+        previewTorrent = next
+    }
+
     private func torrentFileURL(_ file: TorrentFile, in torrent: Torrent) -> URL {
         URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: file.name)
     }
@@ -2424,18 +2548,43 @@ struct ContentView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func exportSelectedTorrent(hash: String?) {
-        guard let torrent = torrents.first(where: { $0.id == hash }) else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = torrent.name + ".torrent"
-        panel.allowedContentTypes = [UTType(filenameExtension: "torrent") ?? .data]
+    private func exportSelectedTorrents(hashes: [String]) {
+        let selected = hashes.compactMap { hash in torrents.first(where: { $0.id == hash }) }
+        guard !selected.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
         panel.begin { response in
-            guard response == .OK, let destination = panel.url else { return }
+            guard response == .OK, let directory = panel.url else { return }
             Task {
-                do {
-                    let data = try await store.exportTorrent(torrent.id)
-                    try data.write(to: destination, options: .atomic)
-                } catch { actionError = error.localizedDescription }
+                var failures: [String] = []
+                var reservedNames = Set<String>()
+                for torrent in selected {
+                    do {
+                        let data = try await store.exportTorrent(torrent.id)
+                        let invalidFilenameCharacters = CharacterSet(charactersIn: "/\\:?*|\"<>").union(.controlCharacters)
+                        var sanitizedScalars = String.UnicodeScalarView()
+                        for scalar in torrent.name.unicodeScalars {
+                            sanitizedScalars.append(invalidFilenameCharacters.contains(scalar) ? "_" : scalar)
+                        }
+                        let baseName = String(sanitizedScalars).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let stem = baseName.isEmpty ? torrent.id : baseName
+                        var filename = "\(stem).torrent"
+                        var counter = 0
+                        while reservedNames.contains(filename.lowercased()) || FileManager.default.fileExists(atPath: directory.appendingPathComponent(filename).path) {
+                            counter += 1
+                            filename = "\(stem) (\(counter)).torrent"
+                        }
+                        reservedNames.insert(filename.lowercased())
+                        try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
+                    } catch {
+                        failures.append("\(torrent.name): \(error.localizedDescription)")
+                    }
+                }
+                if !failures.isEmpty {
+                    actionError = "Some torrent files could not be exported:\n\(failures.joined(separator: "\n"))"
+                }
             }
         }
     }
@@ -2451,6 +2600,153 @@ private struct DetailInput: Identifiable {
     let title: String
     let hint: String
     let initialValue: String
+}
+
+private struct TrackerBatchEditorTarget: Identifiable {
+    let id = UUID()
+    let hashes: [String]
+}
+
+private struct TrackerBatchEntry: Identifiable {
+    let id = UUID()
+    var url: String
+    var tier: Int
+}
+
+private struct TrackerBatchEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let store: TorrentStore
+    let hashes: [String]
+    @State private var entries: [TrackerBatchEntry] = []
+    @State private var isLoading = true
+    @State private var hasLoadedTrackers = false
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private var validEntries: [TrackerBatchEntry] {
+        var seenURLs = Set<String>()
+        return entries.compactMap { entry in
+            let url = entry.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty, seenURLs.insert(url).inserted else { return nil }
+            return TrackerBatchEntry(url: url, tier: entry.tier)
+        }
+    }
+
+    private var hasInvalidEntries: Bool {
+        entries.contains { entry in
+            let value = entry.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return false }
+            guard let components = URLComponents(string: value) else { return true }
+            return components.scheme == nil || components.host == nil || (0...255).contains(entry.tier) == false
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Trackers common to the selected torrents are shown here. Saving replaces each selected torrent’s tracker list with this list.")
+                .font(.subheadline).foregroundStyle(.secondary)
+
+            if isLoading {
+                ProgressView("Loading trackers…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Form {
+                    Section("Tracker URLs") {
+                        if entries.isEmpty {
+                            Text("No trackers are common to every selected torrent.")
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach($entries) { $entry in
+                            HStack(spacing: 10) {
+                                TextField("https://tracker.example/announce", text: $entry.url)
+                                Stepper("Tier \(entry.tier + 1)", value: $entry.tier, in: 0...255)
+                                    .frame(width: 130)
+                                Button(role: .destructive) {
+                                    entries.removeAll { $0.id == entry.id }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove tracker")
+                                .accessibilityLabel("Remove tracker")
+                            }
+                        }
+                        Button("Add Tracker") { entries.append(TrackerBatchEntry(url: "", tier: 0)) }
+                    }
+                }
+                .formStyle(.grouped)
+            }
+
+            if let errorMessage {
+                Text(errorMessage).font(.caption).foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { Task { await save() } }
+                    .buttonStyle(.glassProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isLoading || !hasLoadedTrackers || isSaving || hasInvalidEntries)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 660, idealWidth: 760, minHeight: 430, idealHeight: 520)
+        .task { await loadCommonTrackers() }
+    }
+
+    private func loadCommonTrackers() async {
+        do {
+            var trackersByTorrent: [[TorrentTracker]] = []
+            for hash in hashes {
+                trackersByTorrent.append(try await store.trackers(for: hash).filter { ($0.tier ?? -1) >= 0 })
+            }
+            guard let first = trackersByTorrent.first else {
+                entries = []
+                isLoading = false
+                return
+            }
+            var seenURLs = Set<String>()
+            entries = first.compactMap { tracker in
+                guard seenURLs.insert(tracker.url).inserted,
+                      trackersByTorrent.dropFirst().allSatisfy({ list in list.contains { $0.url == tracker.url } }) else { return nil }
+                return TrackerBatchEntry(url: tracker.url, tier: max(0, tracker.tier ?? 0))
+            }
+            hasLoadedTrackers = true
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func save() async {
+        isSaving = true
+        errorMessage = nil
+        do {
+            var existingURLs = Set<String>()
+            for hash in hashes {
+                let trackers = try await store.trackers(for: hash)
+                existingURLs.formUnion(trackers.filter { ($0.tier ?? -1) >= 0 }.map(\.url))
+            }
+            try await store.removeTrackers(hashes: hashes, urls: Array(existingURLs))
+
+            let trackers = validEntries
+            if !trackers.isEmpty {
+                let maximumTier = trackers.map(\.tier).max() ?? 0
+                var lines: [String] = []
+                for tier in 0...maximumTier {
+                    if tier > 0 { lines.append("") }
+                    lines.append(contentsOf: trackers.filter { $0.tier == tier }.map(\.url))
+                }
+                try await store.addTrackers(hashes: hashes, entries: lines.joined(separator: "\n"))
+            }
+            dismiss()
+        } catch {
+            errorMessage = "Tracker changes could not be fully applied: \(error.localizedDescription)"
+            isSaving = false
+        }
+    }
 }
 
 private enum TorrentTextAction: String, Identifiable {

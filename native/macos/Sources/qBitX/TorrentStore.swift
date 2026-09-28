@@ -501,6 +501,11 @@ final class TorrentStore {
         try await api.addTracker(hash: hash, url: url)
     }
 
+    func addTrackers(hashes: [String], entries: String) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.addTrackers(hashes: hashes, entries: entries)
+    }
+
     func editTracker(hash: String, url: String, newURL: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.editTracker(hash: hash, url: url, newURL: newURL)
@@ -519,6 +524,11 @@ final class TorrentStore {
     func removeTracker(hash: String, url: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.removeTracker(hash: hash, url: url)
+    }
+
+    func removeTrackers(hashes: [String], urls: [String]) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.removeTrackers(hashes: hashes, urls: urls)
     }
 
     func addWebSeed(hash: String, url: String) async throws {
