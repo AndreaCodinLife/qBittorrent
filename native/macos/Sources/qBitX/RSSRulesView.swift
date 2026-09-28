@@ -9,6 +9,8 @@ struct RSSRulesView: View {
     @State private var rules: [String: [String: Any]] = [:]
     @State private var feedURLs: [String] = []
     @State private var selectedName: String?
+    @State private var selectedRuleNames: Set<String> = []
+    @FocusState private var isRuleNameFieldFocused: Bool
     @State private var nameDraft = ""
     @State private var newName = ""
     @State private var mustContain = ""
@@ -29,7 +31,9 @@ struct RSSRulesView: View {
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var showsImport = false
-    @State private var pendingClearDownloadHistoryRule: String?
+    @State private var pendingClearDownloadHistoryRules: [String] = []
+    @State private var pendingRemoveRuleNames: [String] = []
+    @State private var matchLoadID = UUID()
 
     private var mustContainValidationError: String? {
         RSSRuleValidation.regularExpressionError(for: mustContain, enabled: useRegex)
@@ -65,12 +69,12 @@ struct RSSRulesView: View {
                         .help("Add rule")
                         .accessibilityLabel("Add RSS downloader rule")
                     Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
-                        .buttonStyle(.glass).disabled(selectedName == nil)
-                        .help("Remove selected rule")
-                        .accessibilityLabel("Remove selected RSS downloader rule")
+                        .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
+                        .help("Remove selected rules")
+                        .accessibilityLabel("Remove selected RSS downloader rules")
                 }
                 .padding(12)
-                List(selection: $selectedName) {
+                List(selection: $selectedRuleNames) {
                     ForEach(rules.keys.sorted(), id: \.self) { name in
                         HStack {
                             Image(systemName: (rules[name]?["enabled"] as? Bool ?? true) ? "checkmark.circle.fill" : "circle")
@@ -78,14 +82,33 @@ struct RSSRulesView: View {
                             Text(name).lineLimit(1)
                         }
                         .tag(name)
+                        .onTapGesture(count: 2) { renameRule(named: name) }
                         .contextMenu {
-                            Button("Enable/Disable") { toggleRule(name) }
-                            Button("Clone…") { clone(name) }
-                            Button("Remove", role: .destructive) { Task { await remove(name) } }
+                            if selectedRuleNames.count > 1, selectedRuleNames.contains(name) {
+                                Button("Remove Selected Rules", role: .destructive) {
+                                    requestRemoval(of: selectedRuleNames)
+                                }
+                                Button("Clear Downloaded Episodes…") {
+                                    pendingClearDownloadHistoryRules = selectedRuleNames.sorted()
+                                }
+                            } else {
+                                Button("Enable/Disable") { toggleRule(name) }
+                                Button("Rename…") { renameRule(named: name) }
+                                Button("Clone…") { clone(name) }
+                                Button("Remove", role: .destructive) { requestRemoval(of: [name]) }
+                                Button("Clear Downloaded Episodes…") {
+                                    pendingClearDownloadHistoryRules = [name]
+                                }
+                            }
                         }
                     }
                 }
                 .listStyle(.sidebar)
+                .onKeyPress(KeyEquivalent("\u{F705}")) {
+                    renameSelectedRule()
+                    return .handled
+                }
+                .onDeleteCommand { removeSelected() }
                 HStack {
                     TextField("New rule name", text: $newName).textFieldStyle(.roundedBorder)
                     Button("Add") { createRule() }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -96,10 +119,14 @@ struct RSSRulesView: View {
         } detail: {
             VStack(spacing: 0) {
                 HStack {
-                    Text(selectedName == nil ? "Select a rule" : "Rule Settings").font(.title2.weight(.semibold))
+                    Text(detailTitle).font(.title2.weight(.semibold))
                     Spacer()
                     if selectedName != nil {
-                        TextField("Rule name", text: $nameDraft).textFieldStyle(.roundedBorder).frame(width: 220)
+                        TextField("Rule name", text: $nameDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .focused($isRuleNameFieldFocused)
+                            .onSubmit(save)
                         Button("Save") { save() }.buttonStyle(.glassProminent).disabled(isSaving)
                     }
                     Button("Done") { dismiss() }
@@ -107,7 +134,9 @@ struct RSSRulesView: View {
                 .padding(15)
                 Divider()
                 if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red).padding(8) }
-                if selectedName == nil {
+                if selectedRuleNames.count > 1 {
+                    multipleRulesForm
+                } else if selectedName == nil {
                     ContentUnavailableView("No Rule Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Create or select a rule to configure automatic torrent downloads."))
                 } else {
                     Form {
@@ -140,7 +169,7 @@ struct RSSRulesView: View {
                                     .fixedSize()
                             }
                             Button("Clear Downloaded Episodes…", role: .destructive) {
-                                pendingClearDownloadHistoryRule = selectedName
+                                if let selectedName { pendingClearDownloadHistoryRules = [selectedName] }
                             }
                             .disabled(selectedName == nil || isSaving)
                         }
@@ -193,23 +222,53 @@ struct RSSRulesView: View {
         }
         .frame(minWidth: 900, minHeight: 700)
         .task { await reload() }
+        .onChange(of: selectedRuleNames) { _, names in
+            if names.count == 1 {
+                selectedName = names.first
+            } else {
+                selectedName = nil
+                if names.isEmpty {
+                    matches = []
+                    matchLoadID = UUID()
+                } else {
+                    Task { await loadMatches(names.sorted()) }
+                }
+            }
+        }
         .onChange(of: selectedName) { _, value in loadDraft(value) }
         .confirmationDialog(
             "Clear downloaded episodes?",
             isPresented: Binding(
-                get: { pendingClearDownloadHistoryRule != nil },
-                set: { if !$0 { pendingClearDownloadHistoryRule = nil } }
+                get: { !pendingClearDownloadHistoryRules.isEmpty },
+                set: { if !$0 { pendingClearDownloadHistoryRules = [] } }
             ),
             titleVisibility: .visible
         ) {
             Button("Clear Downloaded Episodes", role: .destructive) {
-                guard let name = pendingClearDownloadHistoryRule else { return }
-                pendingClearDownloadHistoryRule = nil
-                clearDownloadedEpisodes(named: name)
+                let names = pendingClearDownloadHistoryRules
+                pendingClearDownloadHistoryRules = []
+                clearDownloadedEpisodes(named: names)
             }
-            Button("Cancel", role: .cancel) { pendingClearDownloadHistoryRule = nil }
+            Button("Cancel", role: .cancel) { pendingClearDownloadHistoryRules = [] }
         } message: {
-            Text("Are you sure you want to clear the list of downloaded episodes for this rule?")
+            Text(pendingClearDownloadHistoryRules.count == 1
+                ? "Are you sure you want to clear downloaded episodes for ‘\(pendingClearDownloadHistoryRules[0])’?"
+                : "Are you sure you want to clear downloaded episodes for the selected rules?")
+        }
+        .confirmationDialog(
+            "Remove selected RSS downloader rules?",
+            isPresented: Binding(
+                get: { !pendingRemoveRuleNames.isEmpty },
+                set: { if !$0 { pendingRemoveRuleNames = [] } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Rules", role: .destructive) { removePendingRules() }
+            Button("Cancel", role: .cancel) { pendingRemoveRuleNames = [] }
+        } message: {
+            Text(pendingRemoveRuleNames.count == 1
+                ? "Are you sure you want to remove ‘\(pendingRemoveRuleNames[0])’?"
+                : "Are you sure you want to remove the selected download rules?")
         }
         .fileImporter(isPresented: $showsImport, allowedContentTypes: [.json]) { result in
             do {
@@ -225,6 +284,55 @@ struct RSSRulesView: View {
         }
     }
 
+    private var detailTitle: String {
+        if selectedRuleNames.count > 1 { return "\(selectedRuleNames.count) Rules Selected" }
+        return selectedName == nil ? "Select a rule" : "Rule Settings"
+    }
+
+    private var multipleRulesForm: some View {
+        Form {
+            Section("Feeds") {
+                Text("Feed assignments apply to all selected rules.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if feedURLs.isEmpty {
+                    Text("Add RSS feeds before assigning them to rules.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(feedURLs, id: \.self) { url in
+                        let assignedCount = selectedRuleNames.reduce(into: 0) { count, name in
+                            if (rules[name]?["affectedFeeds"] as? [String] ?? []).contains(url) { count += 1 }
+                        }
+                        Toggle(isOn: Binding(
+                            get: { assignedCount == selectedRuleNames.count },
+                            set: { setFeedAssignment(url, enabled: $0) }
+                        )) {
+                            HStack {
+                                Text(url)
+                                Spacer()
+                                if assignedCount > 0, assignedCount < selectedRuleNames.count {
+                                    Text("Mixed").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .disabled(isSaving)
+                    }
+                }
+            }
+            Section("Current matches") {
+                if matches.isEmpty {
+                    Text("No matching articles for the selected rules.").foregroundStyle(.secondary)
+                }
+                ForEach(matches, id: \.0) { feed, titles in
+                    DisclosureGroup("\(feed) (\(titles.count))") {
+                        ForEach(titles, id: \.self) { Text($0).font(.caption) }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     @ViewBuilder
     private func validationWarning(_ message: String?, label: String) -> some View {
         if let message {
@@ -236,25 +344,24 @@ struct RSSRulesView: View {
         }
     }
 
-    private func clearDownloadedEpisodes(named name: String) {
-        guard var rule = rules[name] else { return }
-        rule["previouslyMatchedEpisodes"] = [String]()
-        do {
-            let data = try JSONSerialization.data(withJSONObject: rule, options: [.fragmentsAllowed, .sortedKeys])
-            guard let definition = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
-            Task {
-                isSaving = true
-                defer { isSaving = false }
-                do {
+    private func clearDownloadedEpisodes(named names: [String]) {
+        guard !names.isEmpty else { return }
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                for name in names {
+                    guard var rule = rules[name] else { continue }
+                    rule["previouslyMatchedEpisodes"] = [String]()
+                    let data = try JSONSerialization.data(withJSONObject: rule, options: [.fragmentsAllowed, .sortedKeys])
+                    guard let definition = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
                     try await store.setRSSRule(name: name, definition: definition)
                     rules[name] = rule
-                    if selectedName == name { await loadMatches(name) }
-                } catch {
-                    errorMessage = error.localizedDescription
                 }
+                if !selectedRuleNames.isEmpty { await loadMatches(selectedRuleNames.sorted()) }
+            } catch {
+                errorMessage = error.localizedDescription
             }
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -265,8 +372,20 @@ struct RSSRulesView: View {
             rules = raw
             let feeds = try await store.rssFeeds()
             feedURLs = feeds.map(\.url).sorted()
-            if selectedName == nil || rules[selectedName!] == nil { selectedName = rules.keys.sorted().first }
-            loadDraft(selectedName)
+            selectedRuleNames.formIntersection(Set(rules.keys))
+            if selectedRuleNames.isEmpty, let firstName = rules.keys.sorted().first {
+                selectedRuleNames = [firstName]
+            }
+            if selectedRuleNames.count == 1 {
+                selectedName = selectedRuleNames.first
+                loadDraft(selectedName)
+            } else if selectedRuleNames.count > 1 {
+                selectedName = nil
+                await loadMatches(selectedRuleNames.sorted())
+            } else {
+                selectedName = nil
+                matches = []
+            }
             errorMessage = nil
         } catch { errorMessage = error.localizedDescription }
     }
@@ -295,11 +414,29 @@ struct RSSRulesView: View {
     }
 
     private func loadMatches(_ name: String) async {
+        await loadMatches([name])
+    }
+
+    private func loadMatches(_ names: [String]) async {
+        let requestID = UUID()
+        matchLoadID = requestID
+        var mergedMatches: [String: Set<String>] = [:]
         do {
-            let data = try await store.rssRuleMatches(name)
-            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else { return }
-            matches = result.sorted { $0.key < $1.key }
-        } catch { errorMessage = error.localizedDescription }
+            for name in names {
+                let data = try await store.rssRuleMatches(name)
+                guard let result = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else { throw APIError.badResponse }
+                for (feed, titles) in result {
+                    mergedMatches[feed, default: []].formUnion(titles)
+                }
+            }
+            guard matchLoadID == requestID else { return }
+            matches = mergedMatches
+                .map { ($0.key, $0.value.sorted()) }
+                .sorted { $0.0 < $1.0 }
+        } catch {
+            guard matchLoadID == requestID else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func createRule() {
@@ -311,6 +448,7 @@ struct RSSRulesView: View {
                 newName = ""
                 await reload()
                 selectedName = name
+                selectedRuleNames = [name]
                 loadDraft(name)
             } catch { errorMessage = error.localizedDescription }
         }
@@ -349,6 +487,7 @@ struct RSSRulesView: View {
                 try await store.setRSSRule(name: newRuleName, definition: definition)
                 await reload()
                 selectedName = newRuleName
+                selectedRuleNames = [newRuleName]
                 await loadMatches(newRuleName)
             } catch { errorMessage = error.localizedDescription }
             isSaving = false
@@ -364,19 +503,62 @@ struct RSSRulesView: View {
     private func clone(_ name: String) {
         let cloneName = "\(name) copy"
         Task {
-            do { try await store.cloneRSSRule(name, as: cloneName); await reload() }
-            catch { errorMessage = error.localizedDescription }
+            do {
+                try await store.cloneRSSRule(name, as: cloneName)
+                await reload()
+                selectedRuleNames = [cloneName]
+                selectedName = cloneName
+                loadDraft(cloneName)
+            } catch { errorMessage = error.localizedDescription }
         }
     }
 
     private func removeSelected() {
-        guard let selectedName else { return }
-        Task { await remove(selectedName) }
+        requestRemoval(of: selectedRuleNames)
     }
 
-    private func remove(_ name: String) async {
-        do { try await store.removeRSSRule(name); selectedName = nil; await reload() }
-        catch { errorMessage = error.localizedDescription }
+    private func requestRemoval(of names: Set<String>) {
+        requestRemoval(of: Array(names))
+    }
+
+    private func requestRemoval(of names: [String]) {
+        let validNames = names.filter { rules[$0] != nil }.sorted()
+        guard !validNames.isEmpty else { return }
+        pendingRemoveRuleNames = validNames
+    }
+
+    private func removePendingRules() {
+        let names = pendingRemoveRuleNames
+        pendingRemoveRuleNames = []
+        guard !names.isEmpty else { return }
+        Task {
+            isSaving = true
+            defer { isSaving = false }
+            do {
+                for name in names { try await store.removeRSSRule(name) }
+                selectedRuleNames.subtract(names)
+                if let selectedName, names.contains(selectedName) { self.selectedName = nil }
+                await reload()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func renameSelectedRule() {
+        guard selectedRuleNames.count == 1, let name = selectedRuleNames.first else { return }
+        renameRule(named: name)
+    }
+
+    private func renameRule(named name: String) {
+        guard rules[name] != nil else { return }
+        selectedRuleNames = [name]
+        selectedName = name
+        nameDraft = name
+        Task { @MainActor in
+            await Task.yield()
+            isRuleNameFieldFocused = true
+        }
     }
 
     private func persist(_ rule: [String: Any], name: String) {
@@ -387,6 +569,31 @@ struct RSSRulesView: View {
                 try await store.setRSSRule(name: name, definition: definition)
                 await reload()
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func setFeedAssignment(_ feedURL: String, enabled: Bool) {
+        let names = selectedRuleNames.sorted()
+        guard names.count > 1, !isSaving else { return }
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                for name in names {
+                    guard var rule = rules[name] else { continue }
+                    var affectedFeeds = Set(rule["affectedFeeds"] as? [String] ?? [])
+                    if enabled { affectedFeeds.insert(feedURL) }
+                    else { affectedFeeds.remove(feedURL) }
+                    rule["affectedFeeds"] = affectedFeeds.sorted()
+                    let data = try JSONSerialization.data(withJSONObject: rule, options: [.fragmentsAllowed, .sortedKeys])
+                    guard let definition = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
+                    try await store.setRSSRule(name: name, definition: definition)
+                    rules[name] = rule
+                }
+                await loadMatches(names)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
