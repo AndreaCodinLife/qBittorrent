@@ -455,6 +455,7 @@ struct ContentView: View {
             moveSelectedToBottom: { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } },
             pauseSession: { setSessionPaused(true) },
             resumeSession: { setSessionPaused(false) },
+            toggleSpeedLimitsMode: toggleSpeedLimitsMode,
             showAppPreferences: { showsAppPreferences = true },
             showPreferences: { showsBackendPreferences = true },
             showStatistics: { showsStatistics = true },
@@ -676,6 +677,7 @@ struct ContentView: View {
                     Button("Resume Session") { setSessionPaused(false) }
                     Divider()
                     Button("Speed Limits…") { showsSpeedLimits = true }
+                    Button("Toggle Alternative Speed Limits") { toggleSpeedLimitsMode() }
                     Menu("When Downloads Complete") {
                         completionActionButton("none", title: "Do Nothing")
                         completionActionButton("quit", title: "Quit qBitX")
@@ -2514,6 +2516,13 @@ struct ContentView: View {
     private func setSessionPaused(_ paused: Bool) {
         Task {
             do { try await store.setSessionPaused(paused) }
+            catch { actionError = error.localizedDescription }
+        }
+    }
+
+    private func toggleSpeedLimitsMode() {
+        Task {
+            do { try await store.toggleSpeedLimitsMode() }
             catch { actionError = error.localizedDescription }
         }
     }

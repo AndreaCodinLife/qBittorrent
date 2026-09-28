@@ -618,6 +618,11 @@ final class TorrentStore {
         try await api.setSessionPaused(paused)
     }
 
+    func toggleSpeedLimitsMode() async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.toggleSpeedLimitsMode()
+    }
+
     func speedLimits() async throws -> (SpeedLimits, Bool) {
         guard let api else { throw TorrentStoreError.disconnected }
         async let limits = api.speedLimits()

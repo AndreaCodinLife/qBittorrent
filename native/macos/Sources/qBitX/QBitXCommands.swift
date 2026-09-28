@@ -16,6 +16,7 @@ struct QBitXCommandActions {
     var moveSelectedToBottom: () -> Void
     var pauseSession: () -> Void
     var resumeSession: () -> Void
+    var toggleSpeedLimitsMode: () -> Void
     var showAppPreferences: () -> Void
     var showPreferences: () -> Void
     var showStatistics: () -> Void
@@ -82,6 +83,7 @@ struct QBitXCommands: Commands {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Button("Resume Session") { actions?.resumeSession() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+            Button("Toggle Alternative Speed Limits") { actions?.toggleSpeedLimitsMode() }
         }
 
         CommandMenu("Navigate") {

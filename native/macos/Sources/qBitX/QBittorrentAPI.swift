@@ -413,6 +413,10 @@ actor QBittorrentAPI {
         _ = try await request(paused ? "transfer/pauseSession" : "transfer/resumeSession", method: "POST")
     }
 
+    func toggleSpeedLimitsMode() async throws {
+        _ = try await request("transfer/toggleSpeedLimitsMode", method: "POST")
+    }
+
     func speedLimits() async throws -> SpeedLimits {
         let data = try await request("transfer/getSpeedLimits")
         return try JSONDecoder().decode(SpeedLimits.self, from: data)
