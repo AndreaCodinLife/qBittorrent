@@ -619,6 +619,11 @@ final class TorrentStore {
         return try await api.searchPlugins()
     }
 
+    func searchJobs() async throws -> [SearchJobStatus] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.searchJobs()
+    }
+
     func startSearch(_ pattern: String, category: String = "all", plugin: String = "enabled") async throws -> Int {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.startSearch(pattern, category: category, plugin: plugin)
@@ -627,6 +632,11 @@ final class TorrentStore {
     func stopSearch(_ id: Int) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.stopSearch(id)
+    }
+
+    func deleteSearch(_ id: Int) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.deleteSearch(id)
     }
 
     func installSearchPlugin(_ source: String) async throws {

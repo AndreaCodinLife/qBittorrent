@@ -347,20 +347,25 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 mainTabs
                 Divider()
-                switch mainTab {
-                case .transfers:
-                    if showDetailPane {
-                        VSplitView {
-                            torrentTable.frame(minHeight: 240)
-                            detailsPane.frame(minHeight: 170)
-                        }
-                    } else {
-                        torrentTable
-                    }
-                case .search:
+                ZStack {
                     SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
-                case .rss:
-                    RSSPane(store: store)
+                        .opacity(mainTab == .search ? 1 : 0)
+                        .allowsHitTesting(mainTab == .search)
+                        .accessibilityHidden(mainTab != .search)
+
+                    if mainTab == .transfers {
+                        if showDetailPane {
+                            VSplitView {
+                                torrentTable.frame(minHeight: 240)
+                                detailsPane.frame(minHeight: 170)
+                            }
+                        } else {
+                            torrentTable
+                        }
+                    }
+                    if mainTab == .rss {
+                        RSSPane(store: store)
+                    }
                 }
                 if showStatusBar {
                     Divider()

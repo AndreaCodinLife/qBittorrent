@@ -3,9 +3,9 @@ import SwiftUI
 
 private struct SearchResultTab: Identifiable {
     let id: Int
-    let query: String
-    let category: String
-    let plugin: String
+    var query: String
+    var category: String
+    var plugin: String
     var results: [SearchResult]
     var status: String
     var total: Int
@@ -51,6 +51,8 @@ struct SearchPane: View {
     @Binding var isSearchTabVisible: Bool
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.searchHistoryJSON") private var searchHistoryJSON = "[]"
+    @AppStorage("qBitX.searchHistoryLength") private var searchHistoryLength = 50
+    @AppStorage("qBitX.closeSearchTabWithMiddleClick") private var closeSearchTabWithMiddleClick = true
     @AppStorage("qBitX.systemNotificationsEnabled") private var systemNotificationsEnabled = true
     @AppStorage("qBitX.notifySearchComplete") private var notifyOnSearchComplete = true
     @State private var query = ""
@@ -75,7 +77,8 @@ struct SearchPane: View {
     private var selectedSearchTab: SearchResultTab? { searchTabs.first { $0.id == selectedSearchTabID } }
     private var searching: Bool { !searchStartTasks.isEmpty || !searchTasks.isEmpty }
     private var searchHistory: [String] {
-        (try? JSONDecoder().decode([String].self, from: Data(searchHistoryJSON.utf8))) ?? []
+        guard searchHistoryLength > 0 else { return [] }
+        return Array(((try? JSONDecoder().decode([String].self, from: Data(searchHistoryJSON.utf8))) ?? []).prefix(searchHistoryLength))
     }
     private var categories: [SearchCategory] {
         let found = enabledPlugins.flatMap { $0.supportedCategories ?? [] }
@@ -214,6 +217,12 @@ struct SearchPane: View {
                                 .padding(.trailing, 4)
                                 .padding(.vertical, 6)
                                 .glassEffect(selectedSearchTabID == tab.id ? .regular.tint(.accentColor).interactive() : .regular.interactive(), in: .capsule)
+                                .background {
+                                    if closeSearchTabWithMiddleClick {
+                                        SearchTabMiddleClickMonitor { closeSearchTab(tab.id) }
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, 12)
@@ -331,6 +340,7 @@ struct SearchPane: View {
             guard store.isConnected else { return }
             do { plugins = try await store.searchPlugins() }
             catch { errorMessage = error.localizedDescription }
+            await restoreSearchJobs()
         }
         .sheet(isPresented: $showsPlugins, onDismiss: {
             Task { plugins = (try? await store.searchPlugins()) ?? plugins }
@@ -340,6 +350,11 @@ struct SearchPane: View {
                 try await store.add(url: url, downloader: downloader, options: options)
             }
         }
+        .onChange(of: searchHistoryLength) { _, length in
+            let existing = (try? JSONDecoder().decode([String].self, from: Data(searchHistoryJSON.utf8))) ?? []
+            let updated = length == 0 ? [] : Array(existing.prefix(length))
+            if let data = try? JSONEncoder().encode(updated) { searchHistoryJSON = String(decoding: data, as: UTF8.self) }
+        }
         .onDisappear { stopAllSearches() }
     }
 
@@ -347,10 +362,12 @@ struct SearchPane: View {
         let pattern = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pattern.isEmpty else { return }
         errorMessage = nil
-        var history = searchHistory.filter { $0.localizedCaseInsensitiveCompare(pattern) != .orderedSame }
-        history.insert(pattern, at: 0)
-        if history.count > 30 { history.removeLast(history.count - 30) }
-        if let data = try? JSONEncoder().encode(history) { searchHistoryJSON = String(decoding: data, as: UTF8.self) }
+        if searchHistoryLength > 0 {
+            var history = searchHistory.filter { $0.localizedCaseInsensitiveCompare(pattern) != .orderedSame }
+            history.insert(pattern, at: 0)
+            if history.count > searchHistoryLength { history.removeLast(history.count - searchHistoryLength) }
+            if let data = try? JSONEncoder().encode(history) { searchHistoryJSON = String(decoding: data, as: UTF8.self) }
+        }
         let requestID = UUID()
         let task = Task {
             defer { searchStartTasks[requestID] = nil }
@@ -402,6 +419,52 @@ struct SearchPane: View {
             if !isSearchTabVisible, systemNotificationsEnabled, notifyOnSearchComplete {
                 MacOSNotifications.post(title: "Search Engine", body: "Search has failed.")
             }
+        }
+    }
+
+    private func restoreSearchJobs() async {
+        do {
+            let jobs = try await store.searchJobs()
+            for job in jobs {
+                let plugin = job.plugins.isEmpty ? "enabled" : job.plugins.joined(separator: "|")
+                if let index = searchTabs.firstIndex(where: { $0.id == job.id }) {
+                    searchTabs[index].query = job.pattern
+                    searchTabs[index].category = job.category
+                    searchTabs[index].plugin = plugin
+                } else {
+                    searchTabs.append(SearchResultTab(
+                        id: job.id,
+                        query: job.pattern,
+                        category: job.category,
+                        plugin: plugin,
+                        results: [],
+                        status: job.status,
+                        total: job.total
+                    ))
+                }
+
+                do {
+                    let response = try await store.searchResults(job.id)
+                    updateSearchTab(job.id, response: response)
+                    if response.status == "Running", searchTasks[job.id] == nil {
+                        searchTasks[job.id] = Task { await pollSearch(job.id) }
+                    }
+                } catch {
+                    if let index = searchTabs.firstIndex(where: { $0.id == job.id }) {
+                        searchTabs[index].status = "Error"
+                    }
+                    errorMessage = error.localizedDescription
+                }
+            }
+
+            if selectedSearchTabID == nil, let last = searchTabs.last {
+                selectedSearchTabID = last.id
+                query = last.query
+                selectedCategory = last.category
+                selectedPlugin = last.plugin
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -501,7 +564,12 @@ struct SearchPane: View {
     }
 
     private func closeSearchTab(_ id: Int) {
-        if searchTasks[id] != nil { stopSearch(id) }
+        let shouldStop = searchTasks[id] != nil || searchTabs.first(where: { $0.id == id })?.status == "Running"
+        searchTasks[id]?.cancel()
+        searchTasks[id] = nil
+        if let index = searchTabs.firstIndex(where: { $0.id == id }), searchTabs[index].status == "Running" {
+            searchTabs[index].status = "Stopped"
+        }
         searchTabs.removeAll { $0.id == id }
         if selectedSearchTabID == id {
             selectedSearchTabID = searchTabs.last?.id
@@ -511,5 +579,53 @@ struct SearchPane: View {
                 selectedPlugin = selectedSearchTab.plugin
             }
         }
+        Task {
+            if shouldStop { try? await store.stopSearch(id) }
+            do { try await store.deleteSearch(id) }
+            catch { errorMessage = error.localizedDescription }
+        }
     }
+}
+
+private struct SearchTabMiddleClickMonitor: NSViewRepresentable {
+    let onMiddleClick: () -> Void
+
+    func makeNSView(context: Context) -> SearchTabMiddleClickView {
+        let view = SearchTabMiddleClickView()
+        view.onMiddleClick = onMiddleClick
+        return view
+    }
+
+    func updateNSView(_ view: SearchTabMiddleClickView, context: Context) {
+        view.onMiddleClick = onMiddleClick
+    }
+}
+
+private final class SearchTabMiddleClickView: NSView {
+    var onMiddleClick: (() -> Void)?
+    private var eventMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+            eventMonitor = nil
+            return
+        }
+        guard eventMonitor == nil else { return }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseUp) { [weak self] event in
+            guard event.buttonNumber == 2,
+                  let self,
+                  let window = self.window,
+                  event.window === window else { return event }
+
+            let point = self.convert(event.locationInWindow, from: nil)
+            guard self.bounds.contains(point) else { return event }
+            self.onMiddleClick?()
+            return nil
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

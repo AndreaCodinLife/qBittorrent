@@ -257,6 +257,12 @@ private struct PreferenceItem: Identifiable {
     ]
 
     private static func label(for key: String) -> String {
+        switch key {
+        case "store_search_jobs": return "Store opened search tabs"
+        case "store_search_job_results": return "Also store search results"
+        case "search_enabled": return "Enable search"
+        default: break
+        }
         let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
         return key.split(separator: "_").map { word in
             let value = String(word)
@@ -331,6 +337,8 @@ private struct PreferenceItem: Identifiable {
             "rss_refresh_interval": "How often qBittorrent checks RSS feeds for new articles.",
             "rss_auto_downloading_enabled": "Enable RSS rules that automatically add matching torrents.",
             "search_enabled": "Enable the search tab and search plugins.",
+            "store_search_jobs": "Restore the search tabs on the qBittorrent server when it restarts.",
+            "store_search_job_results": "Keep completed search results so restored search tabs can show their previous results.",
             "confirm_torrent_deletion": "Ask before removing a torrent from the session.",
             "locale": "Language used by the qBittorrent backend and its Web UI."
         ]
@@ -481,6 +489,8 @@ struct BackendPreferencesView: View {
                                     .labelsHidden()
                                     .accessibilityLabel(item.label)
                                     .accessibilityHint(item.explanation)
+                                    .disabled(item.id == "store_search_job_results"
+                                        && items.first(where: { $0.id == "store_search_jobs" })?.draft != "true")
                                 } else if item.isMultiline && !item.readOnly {
                                     TextEditor(text: $item.draft)
                                         .font(.system(.caption, design: .monospaced))

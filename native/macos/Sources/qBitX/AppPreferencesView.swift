@@ -45,6 +45,8 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
+    @AppStorage("qBitX.searchHistoryLength") private var searchHistoryLength = 50
+    @AppStorage("qBitX.closeSearchTabWithMiddleClick") private var closeSearchTabWithMiddleClick = true
 
     let store: TorrentStore
 
@@ -81,6 +83,14 @@ struct AppPreferencesView: View {
                 Section("When Adding Torrents") {
                     Toggle("Show torrent addition options", isOn: $showTorrentAdditionDialog)
                     Text("When off, new torrents use the connected qBittorrent server’s default add settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Search") {
+                    Stepper("Search history items: \(searchHistoryLength)", value: $searchHistoryLength, in: 0...99)
+                    Toggle("Close search tabs with middle-click", isOn: $closeSearchTabWithMiddleClick)
+                    Text("Set the history length to zero to turn off search history. Search tab and result storage is configured in Backend Preferences.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

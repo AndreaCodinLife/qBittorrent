@@ -443,6 +443,11 @@ actor QBittorrentAPI {
         return try JSONDecoder().decode([SearchPlugin].self, from: data)
     }
 
+    func searchJobs() async throws -> [SearchJobStatus] {
+        let data = try await request("search/status")
+        return try JSONDecoder().decode([SearchJobStatus].self, from: data)
+    }
+
     func startSearch(_ pattern: String, category: String = "all", plugin: String = "enabled") async throws -> Int {
         let data = try await request("search/start", method: "POST", form: [
             "pattern": pattern, "category": category, "plugins": plugin
@@ -452,6 +457,10 @@ actor QBittorrentAPI {
 
     func stopSearch(_ id: Int) async throws {
         _ = try await request("search/stop", method: "POST", form: ["id": "\(id)"])
+    }
+
+    func deleteSearch(_ id: Int) async throws {
+        _ = try await request("search/delete", method: "POST", form: ["id": "\(id)"])
     }
 
     func installSearchPlugin(_ source: String) async throws {
@@ -1125,6 +1134,15 @@ private struct SearchStartResponse: Decodable {
 struct SearchResultsResponse: Decodable, Sendable {
     let status: String
     let results: [SearchResult]
+    let total: Int
+}
+
+struct SearchJobStatus: Decodable, Sendable, Identifiable {
+    let id: Int
+    let status: String
+    let pattern: String
+    let category: String
+    let plugins: [String]
     let total: Int
 }
 
