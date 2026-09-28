@@ -1,4 +1,5 @@
 import AppKit
+import RSSRuleSupport
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -28,6 +29,29 @@ struct RSSRulesView: View {
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var showsImport = false
+    @State private var pendingClearDownloadHistoryRule: String?
+
+    private var mustContainValidationError: String? {
+        RSSRuleValidation.regularExpressionError(for: mustContain, enabled: useRegex)
+    }
+
+    private var mustNotContainValidationError: String? {
+        RSSRuleValidation.regularExpressionError(for: mustNotContain, enabled: useRegex)
+    }
+
+    private var episodeFilterValidationError: String? {
+        guard !RSSRuleValidation.isValidEpisodeFilter(episodeFilter) else { return nil }
+        return "Use a season and episode list such as 1x2;8-15;5;30-;. End the filter with a semicolon."
+    }
+
+    private var lastMatchDescription: String {
+        guard let selectedName,
+              let value = rules[selectedName]?["lastMatch"] as? String,
+              let date = RSSRuleValidation.lastMatchDate(from: value)
+        else { return "Last match: Unknown" }
+        let elapsedDays = Int(Date.now.timeIntervalSince(date) / 86_400)
+        return "Last match: \(elapsedDays) days ago"
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -90,12 +114,35 @@ struct RSSRulesView: View {
                         Section("Matching") {
                             Toggle("Enabled", isOn: $enabled)
                             Toggle("Use regular expressions", isOn: $useRegex)
-                            TextField("Must contain", text: $mustContain)
-                            TextField("Must not contain", text: $mustNotContain)
-                            TextField("Episode filter", text: $episodeFilter)
+                            HStack(spacing: 8) {
+                                TextField("Must contain", text: $mustContain)
+                                validationWarning(mustContainValidationError, label: "Invalid must contain expression")
+                            }
+                            HStack(spacing: 8) {
+                                TextField("Must not contain", text: $mustNotContain)
+                                validationWarning(mustNotContainValidationError, label: "Invalid must not contain expression")
+                            }
+                            HStack(spacing: 8) {
+                                TextField("Episode filter", text: $episodeFilter)
+                                validationWarning(episodeFilterValidationError, label: "Invalid episode filter")
+                            }
                             Toggle("Smart episode filter", isOn: $smartFilter)
-                            Stepper("Ignore episodes older than \(ignoreDays) days", value: $ignoreDays, in: 0...3650)
-                            Stepper("Rule priority: \(priority)", value: $priority, in: 0...1000)
+                            Stepper("Ignore episodes older than \(ignoreDays) days", value: $ignoreDays, in: 0...365)
+                            HStack {
+                                Text(lastMatchDescription)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("Priority")
+                                Stepper(value: $priority, in: Int(Int32.min)...Int(Int32.max)) {
+                                    Text("\(priority)").monospacedDigit()
+                                }
+                                    .fixedSize()
+                            }
+                            Button("Clear Downloaded Episodes…", role: .destructive) {
+                                pendingClearDownloadHistoryRule = selectedName
+                            }
+                            .disabled(selectedName == nil || isSaving)
                         }
                         Section("Feeds") {
                             if feedURLs.isEmpty {
@@ -147,6 +194,23 @@ struct RSSRulesView: View {
         .frame(minWidth: 900, minHeight: 700)
         .task { await reload() }
         .onChange(of: selectedName) { _, value in loadDraft(value) }
+        .confirmationDialog(
+            "Clear downloaded episodes?",
+            isPresented: Binding(
+                get: { pendingClearDownloadHistoryRule != nil },
+                set: { if !$0 { pendingClearDownloadHistoryRule = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Clear Downloaded Episodes", role: .destructive) {
+                guard let name = pendingClearDownloadHistoryRule else { return }
+                pendingClearDownloadHistoryRule = nil
+                clearDownloadedEpisodes(named: name)
+            }
+            Button("Cancel", role: .cancel) { pendingClearDownloadHistoryRule = nil }
+        } message: {
+            Text("Are you sure you want to clear the list of downloaded episodes for this rule?")
+        }
         .fileImporter(isPresented: $showsImport, allowedContentTypes: [.json]) { result in
             do {
                 let url = try result.get()
@@ -158,6 +222,39 @@ struct RSSRulesView: View {
                     catch { errorMessage = error.localizedDescription }
                 }
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    @ViewBuilder
+    private func validationWarning(_ message: String?, label: String) -> some View {
+        if let message {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .help(message)
+                .accessibilityLabel(label)
+                .accessibilityValue(message)
+        }
+    }
+
+    private func clearDownloadedEpisodes(named name: String) {
+        guard var rule = rules[name] else { return }
+        rule["previouslyMatchedEpisodes"] = [String]()
+        do {
+            let data = try JSONSerialization.data(withJSONObject: rule, options: [.fragmentsAllowed, .sortedKeys])
+            guard let definition = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
+            Task {
+                isSaving = true
+                defer { isSaving = false }
+                do {
+                    try await store.setRSSRule(name: name, definition: definition)
+                    rules[name] = rule
+                    if selectedName == name { await loadMatches(name) }
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -183,8 +280,8 @@ struct RSSRulesView: View {
         mustNotContain = rule["mustNotContain"] as? String ?? ""
         episodeFilter = rule["episodeFilter"] as? String ?? ""
         smartFilter = rule["smartFilter"] as? Bool ?? false
-        ignoreDays = rule["ignoreDays"] as? Int ?? 0
-        priority = rule["priority"] as? Int ?? 0
+        ignoreDays = min(max(rule["ignoreDays"] as? Int ?? 0, 0), 365)
+        priority = min(max(rule["priority"] as? Int ?? 0, Int(Int32.min)), Int(Int32.max))
         selectedFeeds = Set(rule["affectedFeeds"] as? [String] ?? [])
         let params = rule["torrentParams"] as? [String: Any] ?? [:]
         category = params["category"] as? String ?? rule["assignedCategory"] as? String ?? ""
