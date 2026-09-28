@@ -1,4 +1,7 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
+import QBitXThemeSupport
 
 enum TorrentDoubleClickAction: String, CaseIterable, Identifiable {
     case toggleStop
@@ -23,6 +26,8 @@ enum TorrentDoubleClickAction: String, CaseIterable, Identifiable {
 struct AppPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("qBitX.appearance") private var appearance = "system"
+    @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
+    @AppStorage("qBitX.themeName") private var themeName = ""
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
@@ -52,6 +57,7 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.searchHistoryLength") private var searchHistoryLength = 50
     @AppStorage("qBitX.closeSearchTabWithMiddleClick") private var closeSearchTabWithMiddleClick = true
+    @State private var themeImportError: String?
 
     let store: TorrentStore
 
@@ -67,6 +73,24 @@ struct AppPreferencesView: View {
                     Text("Liquid Glass and other system materials adapt to the selected appearance.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack {
+                        Button("Import qBittorrent Theme Colors…", action: importThemeColors)
+                        if !themePaletteJSON.isEmpty {
+                            Button("Remove Theme") {
+                                themePaletteJSON = ""
+                                themeName = ""
+                            }
+                        }
+                    }
+                    if let palette = QBitXThemePalette(storedJSON: themePaletteJSON), !themePaletteJSON.isEmpty {
+                        Text("\(themeName.isEmpty ? "Custom theme" : themeName): \(palette.colorCount) supported colors applied to torrent states, progress bars, and piece diagrams.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Import a qBittorrent theme folder’s config.json. qBitX applies its supported colors to native controls; Qt stylesheets and custom icons cannot be used by the SwiftUI interface.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Transfer List") {
@@ -198,6 +222,33 @@ struct AppPreferencesView: View {
         .onChange(of: systemNotificationsEnabled) { _, enabled in
             guard enabled else { return }
             Task { _ = await MacOSNotifications.requestAuthorization() }
+        }
+        .alert("Couldn’t Import Theme", isPresented: Binding(
+            get: { themeImportError != nil },
+            set: { if !$0 { themeImportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { themeImportError = nil }
+        } message: {
+            Text(themeImportError ?? "The theme could not be imported.")
+        }
+    }
+
+    private func importThemeColors() {
+        let panel = NSOpenPanel()
+        panel.title = "Import qBittorrent Theme Colors"
+        panel.prompt = "Import"
+        panel.allowedContentTypes = [.json]
+        panel.allowsOtherFileTypes = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let palette = try QBitXThemePalette(contentsOf: url)
+            themePaletteJSON = try palette.storedJSON()
+            themeName = url.deletingLastPathComponent().lastPathComponent
+        } catch {
+            themeImportError = error.localizedDescription
         }
     }
 }

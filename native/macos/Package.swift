@@ -10,7 +10,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "TorrentSourceFileSupport"),
-        .executableTarget(name: "qBitX", dependencies: ["TorrentSourceFileSupport"]),
-        .testTarget(name: "TorrentSourceFileSupportTests", dependencies: ["TorrentSourceFileSupport"])
+        .target(name: "QBitXThemeSupport"),
+        .executableTarget(name: "qBitX", dependencies: ["TorrentSourceFileSupport", "QBitXThemeSupport"]),
+        .testTarget(name: "TorrentSourceFileSupportTests", dependencies: ["TorrentSourceFileSupport"]),
+        .testTarget(name: "QBitXThemeSupportTests", dependencies: ["QBitXThemeSupport"])
     ]
 )

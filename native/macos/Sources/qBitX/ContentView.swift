@@ -1,4 +1,5 @@
 import SwiftUI
+import QBitXThemeSupport
 import Charts
 import UniformTypeIdentifiers
 import TorrentSourceFileSupport
@@ -229,6 +230,7 @@ private final class TorrentContentNodeBuilder {
 struct ContentView: View {
     @Bindable var store: TorrentStore
     @Bindable var programUpdateChecker: ProgramUpdateState
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
     @AppStorage("qBitX.showStatusBar") private var showStatusBar = true
     @AppStorage("qBitX.showDetailPane") private var showDetailPane = true
@@ -244,6 +246,7 @@ struct ContentView: View {
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.appearance") private var appearance = "system"
+    @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingDoubleClickAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedDoubleClickAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
@@ -356,6 +359,7 @@ struct ContentView: View {
     @State private var peers: [TorrentPeer] = []
     @State private var webSeeds: [TorrentWebSeed] = []
     @State private var selectedContentNodeIDs: Set<String> = []
+    @State private var themePalette = QBitXThemePalette()
 
     private var torrents: [Torrent] { store.torrents }
     private var torrentCompletionSnapshot: TorrentCompletionSnapshot { TorrentCompletionSnapshot(torrents) }
@@ -435,13 +439,47 @@ struct ContentView: View {
 
     private func stateColor(for torrent: Torrent) -> Color {
         switch torrent.rawState {
-        case "uploading", "forcedUP": .green
-        case "stalledUP", "stalledDL": .orange
-        case "stoppedUP", "stoppedDL", "queuedUP", "queuedDL": .gray
-        case "checkingUP", "checkingDL", "checkingResumeData", "moving": .purple
-        case "error", "missingFiles": .red
+        case "downloading": themedStateColor("TransferList.Downloading", fallback: .blue)
+        case "metaDL": themedStateColor("TransferList.DownloadingMetadata", fallback: .blue)
+        case "forcedMetaDL": themedStateColor("TransferList.ForcedDownloadingMetadata", fallback: .blue)
+        case "forcedDL": themedStateColor("TransferList.ForcedDownloading", fallback: .blue)
+        case "uploading": themedStateColor("TransferList.Uploading", fallback: .green)
+        case "forcedUP": themedStateColor("TransferList.ForcedUploading", fallback: .green)
+        case "stalledUP": themedStateColor("TransferList.StalledUploading", fallback: .orange)
+        case "stalledDL": themedStateColor("TransferList.StalledDownloading", fallback: .orange)
+        case "queuedDL": themedStateColor("TransferList.QueuedDownloading", fallback: .gray)
+        case "queuedUP": themedStateColor("TransferList.QueuedUploading", fallback: .gray)
+        case "checkingDL": themedStateColor("TransferList.CheckingDownloading", fallback: .purple)
+        case "checkingUP": themedStateColor("TransferList.CheckingUploading", fallback: .purple)
+        case "checkingResumeData": themedStateColor("TransferList.CheckingResumeData", fallback: .purple)
+        case "stoppedDL": themedStateColor("TransferList.StoppedDownloading", fallback: .gray)
+        case "stoppedUP": themedStateColor("TransferList.StoppedUploading", fallback: .gray)
+        case "moving": themedStateColor("TransferList.Moving", fallback: .purple)
+        case "missingFiles": themedStateColor("TransferList.MissingFiles", fallback: .red)
+        case "error": themedStateColor("TransferList.Error", fallback: .red)
         default: .blue
         }
+    }
+
+    private var isUsingDarkThemeColors: Bool {
+        switch appearance {
+        case "dark": true
+        case "light": false
+        default: colorScheme == .dark
+        }
+    }
+
+    private func themeColor(for id: String) -> Color? {
+        guard let color = themePalette.color(for: id, isDark: isUsingDarkThemeColors) else { return nil }
+        return Color(.sRGB, red: color.red, green: color.green, blue: color.blue, opacity: color.alpha)
+    }
+
+    private func themedStateColor(_ id: String, fallback: Color) -> Color {
+        themeColor(for: id) ?? fallback
+    }
+
+    private func loadThemePalette() {
+        themePalette = QBitXThemePalette(storedJSON: themePaletteJSON) ?? QBitXThemePalette()
     }
 
     private var selectedTorrent: Torrent? {
@@ -612,6 +650,7 @@ struct ContentView: View {
             if isConnected { presentNextExternalURLIfReady() }
         }
         .onAppear {
+            loadThemePalette()
             sidebarVisibility = showFiltersSidebar ? .all : .detailOnly
             syncWindowTitle()
             MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: showSpeedInDock)
@@ -620,6 +659,7 @@ struct ContentView: View {
                 DispatchQueue.main.async { NSApp.keyWindow?.miniaturize(nil) }
             }
         }
+        .onChange(of: themePaletteJSON) { _, _ in loadThemePalette() }
         .onChange(of: showSpeedInDock) { _, enabled in
             MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: enabled)
         }
@@ -1520,7 +1560,7 @@ struct ContentView: View {
         TableColumn("Progress") { torrent in
             stateColored(HStack(spacing: 6) {
                 ProgressView(value: torrent.progress)
-                    .tint(colorTransfersByState && progressBarFollowsStateColor ? stateColor(for: torrent) : Color.accentColor)
+                    .tint(colorTransfersByState && progressBarFollowsStateColor ? stateColor(for: torrent) : (themeColor(for: "ProgressBar") ?? Color.accentColor))
                 Text(torrent.progress.formatted(.percent.precision(.fractionLength(0))))
                     .font(.caption.monospacedDigit())
                     .frame(width: 32, alignment: .trailing)
@@ -1632,7 +1672,14 @@ struct ContentView: View {
         ScrollView([.horizontal, .vertical]) {
         VStack(alignment: .leading, spacing: 12) {
         if !pieceStates.isEmpty || !pieceAvailability.isEmpty {
-            TorrentPieceBars(states: pieceStates, availability: pieceAvailability)
+            TorrentPieceBars(
+                states: pieceStates,
+                availability: pieceAvailability,
+                pieceColor: themeColor(for: "PiecesBar.Piece"),
+                partialPieceColor: themeColor(for: "PiecesBar.PartialPiece"),
+                missingPieceColor: themeColor(for: "PiecesBar.MissingPiece"),
+                borderColor: themeColor(for: "PiecesBar.Border")
+            )
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
         }
