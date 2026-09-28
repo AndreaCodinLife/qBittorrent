@@ -952,7 +952,6 @@ struct ContentView: View {
                 Button { showsTorrentCreator = true } label: {
                     toolbarLabel("Create Torrent", image: "doc.badge.plus")
                 }
-                .disabled(!store.usesBundledBackend)
                 .help("Create a .torrent file")
 
                 Menu {
@@ -1237,7 +1236,7 @@ struct ContentView: View {
             Button("Categories and Tags…") { openOrganization() }
             Button("Connection…") { showsConnectionSettings = true }
             Divider()
-            Button("Create Torrent…") { showsTorrentCreator = true }.disabled(!store.usesBundledBackend)
+            Button("Create Torrent…") { showsTorrentCreator = true }
             Button("Cookies…") { showsCookies = true }
             Button("Statistics…") { showsStatistics = true }
             Button("Execution Log") { openExecutionLog() }
