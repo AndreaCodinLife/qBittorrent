@@ -25,6 +25,7 @@ let package = Package(
         .testTarget(name: "RSSArticleSupportTests", dependencies: ["RSSArticleSupport"]),
         .testTarget(name: "RSSRuleSupportTests", dependencies: ["RSSRuleSupport"]),
         .testTarget(name: "WebAPICompatibilityTests", dependencies: ["WebAPICompatibility"]),
-        .testTarget(name: "QBitXThemeSupportTests", dependencies: ["QBitXThemeSupport"])
+        .testTarget(name: "QBitXThemeSupportTests", dependencies: ["QBitXThemeSupport"]),
+        .testTarget(name: "qBitXTests", dependencies: ["qBitX"])
     ]
 )

@@ -23,11 +23,7 @@ struct RSSRulesView: View {
     @State private var priority = 0
     @State private var enabled = true
     @State private var selectedFeeds: Set<String> = []
-    @State private var category = ""
-    @State private var tags = ""
-    @State private var savePath = ""
-    @State private var addPaused = "Default"
-    @State private var contentLayout = "Default"
+    @State private var torrentParamsDraft = TorrentAddOptionsDraft(json: "{}")
     @State private var matches: [(String, [String])] = []
     @State private var errorMessage: String?
     @State private var isSaving = false
@@ -147,7 +143,9 @@ struct RSSRulesView: View {
                             .frame(width: 220)
                             .focused($isRuleNameFieldFocused)
                             .onSubmit(save)
-                        Button("Save") { save() }.buttonStyle(.glassProminent).disabled(isSaving)
+                        Button("Save") { save() }
+                            .buttonStyle(.glassProminent)
+                            .disabled(isSaving || !torrentParamsDraft.hasValidValues)
                     }
                     Button("Done") { dismiss() }
                 }
@@ -210,25 +208,7 @@ struct RSSRulesView: View {
                                 }
                             }
                         }
-                        Section("When a match is found") {
-                            TextField("Category", text: $category)
-                            TextField("Tags (comma separated)", text: $tags)
-                            HStack {
-                                TextField("Save in folder (blank uses category/default)", text: $savePath)
-                                ServerPathBrowserButton(store: store, path: $savePath, kind: .directory)
-                            }
-                            Picker("Add paused", selection: $addPaused) {
-                                Text("Use qBittorrent default").tag("Default")
-                                Text("Always paused").tag("Always")
-                                Text("Start immediately").tag("Never")
-                            }
-                            Picker("Content layout", selection: $contentLayout) {
-                                Text("Default").tag("Default")
-                                Text("Original").tag("Original")
-                                Text("Subfolder").tag("Subfolder")
-                                Text("No subfolder").tag("NoSubfolder")
-                            }
-                        }
+                        TorrentAddOptionsFields(draft: $torrentParamsDraft, store: store)
                         Section("Current matches") {
                             if matches.isEmpty { Text("Save the rule to check matching articles.").foregroundStyle(.secondary) }
                             ForEach(matches, id: \.0) { feed, titles in
@@ -441,14 +421,19 @@ struct RSSRulesView: View {
         ignoreDays = min(max(rule["ignoreDays"] as? Int ?? 0, 0), 365)
         priority = min(max(rule["priority"] as? Int ?? 0, Int(Int32.min)), Int(Int32.max))
         selectedFeeds = Set(rule["affectedFeeds"] as? [String] ?? [])
-        let params = rule["torrentParams"] as? [String: Any] ?? [:]
-        category = params["category"] as? String ?? rule["assignedCategory"] as? String ?? ""
-        tags = (params["tags"] as? [String] ?? []).joined(separator: ", ")
-        savePath = params["save_path"] as? String ?? rule["savePath"] as? String ?? ""
-        if let paused = params["stopped"] as? Bool { addPaused = paused ? "Always" : "Never" }
-        else if let paused = rule["addPaused"] as? Bool { addPaused = paused ? "Always" : "Never" }
-        else { addPaused = "Default" }
-        contentLayout = params["content_layout"] as? String ?? rule["contentLayout"] as? String ?? "Default"
+        var params = rule["torrentParams"] as? [String: Any] ?? [:]
+        if params.isEmpty {
+            params["category"] = rule["assignedCategory"] as? String ?? ""
+            params["save_path"] = rule["savePath"] as? String ?? ""
+            if let stopped = rule["addPaused"] as? Bool { params["stopped"] = stopped }
+            if let layout = rule["contentLayout"] as? String { params["content_layout"] = layout }
+        }
+        if let paramsData = try? JSONSerialization.data(withJSONObject: params, options: [.fragmentsAllowed, .sortedKeys]),
+           let paramsJSON = String(data: paramsData, encoding: .utf8) {
+            torrentParamsDraft = TorrentAddOptionsDraft(json: paramsJSON)
+        } else {
+            torrentParamsDraft = TorrentAddOptionsDraft(json: "{}")
+        }
         Task { await loadMatches(name) }
     }
 
@@ -510,16 +495,19 @@ struct RSSRulesView: View {
                 rule["ignoreDays"] = ignoreDays
                 rule["priority"] = priority
                 rule["affectedFeeds"] = Array(selectedFeeds).sorted()
-                var params = rule["torrentParams"] as? [String: Any] ?? [:]
-                params["category"] = category
-                params["tags"] = tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-                params["save_path"] = savePath
-                params["use_auto_tmm"] = savePath.isEmpty
-                if addPaused == "Default" { params["stopped"] = NSNull() }
-                else { params["stopped"] = addPaused == "Always" }
-                if contentLayout == "Default" { params["content_layout"] = NSNull() }
-                else { params["content_layout"] = contentLayout }
-                rule["torrentParams"] = params
+                guard let paramsData = try? JSONSerialization.data(
+                    withJSONObject: rule["torrentParams"] as? [String: Any] ?? [:],
+                    options: [.fragmentsAllowed, .sortedKeys]
+                ),
+                      let sourceParams = String(data: paramsData, encoding: .utf8),
+                      let editedParamsJSON = torrentParamsDraft.encodedJSON(preserving: sourceParams),
+                      let editedParamsData = editedParamsJSON.data(using: .utf8),
+                      let editedParams = try JSONSerialization.jsonObject(with: editedParamsData) as? [String: Any] else {
+                    errorMessage = "Torrent options contain an invalid value. Check the share limits and try again."
+                    isSaving = false
+                    return
+                }
+                rule["torrentParams"] = editedParams
                 let encoded = try JSONSerialization.data(withJSONObject: rule, options: [.fragmentsAllowed, .sortedKeys])
                 guard let definition = String(data: encoded, encoding: .utf8) else { throw APIError.badResponse }
                 if newRuleName != oldName { try await store.renameRSSRule(oldName, to: newRuleName) }
