@@ -2994,14 +2994,14 @@ struct ContentView: View {
 
         if systemNotificationsEnabled {
             for torrent in torrents where newlyAddedIDs.contains(torrent.id) && notifyOnTorrentAdded {
-                MacOSNotifications.post(title: "Torrent added", body: "‘\(torrent.name)’ was added.")
+                MacOSNotifications.post(title: "Torrent added", body: "‘\(torrent.name)’ was added.", torrentHash: torrent.id)
             }
             for torrent in torrents where newlyCompletedIDs.contains(torrent.id) && notifyOnDownloadComplete {
-                MacOSNotifications.post(title: "Download completed", body: "‘\(torrent.name)’ has finished downloading.")
+                MacOSNotifications.post(title: "Download completed", body: "‘\(torrent.name)’ has finished downloading.", torrentHash: torrent.id)
             }
             for torrent in torrents where newlyErroredIDs.contains(torrent.id) && notifyOnTorrentError {
                 let issue = torrent.rawState == "missingFiles" ? "has missing files" : "has an error"
-                MacOSNotifications.post(title: "Torrent problem", body: "‘\(torrent.name)’ \(issue). Check its status in qBitX.")
+                MacOSNotifications.post(title: "Torrent problem", body: "‘\(torrent.name)’ \(issue). Check its status in qBitX.", torrentHash: torrent.id)
             }
         }
 

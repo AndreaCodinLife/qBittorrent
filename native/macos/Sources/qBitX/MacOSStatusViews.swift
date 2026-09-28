@@ -4,15 +4,55 @@ import SwiftUI
 struct MenuBarSpeedView: View {
     let store: TorrentStore
     @Environment(\.openWindow) private var openWindow
+    @State private var controlError: String?
 
     var body: some View {
-        Text("↓ \(store.transferStatus.downloadText)   ↑ \(store.transferStatus.uploadText)")
-            .accessibilityLabel("Download \(store.transferStatus.downloadText), upload \(store.transferStatus.uploadText)")
+        Text("Transfers")
+            .font(.headline)
+        Label("↓ \(store.transferStatus.downloadText)", systemImage: "arrow.down.circle")
+        Label("↑ \(store.transferStatus.uploadText)", systemImage: "arrow.up.circle")
+        Label("\(downloadingCount) downloading · \(seedingCount) seeding", systemImage: "arrow.down.arrow.up")
+
+        Divider()
+
+        Button("Pause All Transfers") {
+            setSessionPaused(true)
+        }
+        .disabled(!store.isConnected)
+
+        Button("Resume All Transfers") {
+            setSessionPaused(false)
+        }
+        .disabled(!store.isConnected)
+
+        if let controlError {
+            Text(controlError)
+                .foregroundStyle(.secondary)
+        }
 
         Divider()
 
         Button("Open qBitX") {
             openWindow(id: "main")
+        }
+    }
+
+    private var downloadingCount: Int {
+        store.torrents.filter { $0.state == .downloading }.count
+    }
+
+    private var seedingCount: Int {
+        store.torrents.filter { $0.state == .seeding }.count
+    }
+
+    private func setSessionPaused(_ paused: Bool) {
+        controlError = nil
+        Task {
+            do {
+                try await store.setSessionPaused(paused)
+            } catch {
+                controlError = error.localizedDescription
+            }
         }
     }
 }

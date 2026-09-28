@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 import QBitXThemeSupport
@@ -25,6 +26,7 @@ enum TorrentDoubleClickAction: String, CaseIterable, Identifiable {
 
 struct AppPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("qBitX.appearance") private var appearance = "system"
     @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
     @AppStorage("qBitX.themeName") private var themeName = ""
@@ -57,6 +59,8 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.searchHistoryLength") private var searchHistoryLength = 50
     @AppStorage("qBitX.closeSearchTabWithMiddleClick") private var closeSearchTabWithMiddleClick = true
+    @State private var loginItemStatus = SMAppService.mainApp.status
+    @State private var loginItemError: String?
     @State private var themeImportError: String?
 
     let store: TorrentStore
@@ -200,6 +204,20 @@ struct AppPreferencesView: View {
                 Section("When Starting") {
                     Toggle("Start minimized", isOn: $startMinimized)
                     Toggle("Show splash screen on startup", isOn: $showSplashOnStartup)
+                    Toggle("Launch qBitX at login", isOn: launchAtLoginBinding)
+                    Text(loginItemStatusDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if loginItemStatus == .requiresApproval {
+                        Button("Open Login Items Settings") {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                    }
+                    if let loginItemError {
+                        Text(loginItemError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 Section("Updates") {
@@ -219,6 +237,11 @@ struct AppPreferencesView: View {
             }
         }
         .frame(minWidth: 650, minHeight: 430)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                loginItemStatus = SMAppService.mainApp.status
+            }
+        }
         .onChange(of: systemNotificationsEnabled) { _, enabled in
             guard enabled else { return }
             Task { _ = await MacOSNotifications.requestAuthorization() }
@@ -230,6 +253,43 @@ struct AppPreferencesView: View {
             Button("OK", role: .cancel) { themeImportError = nil }
         } message: {
             Text(themeImportError ?? "The theme could not be imported.")
+        }
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { loginItemStatus == .enabled || loginItemStatus == .requiresApproval },
+            set: { setLaunchAtLogin($0) }
+        )
+    }
+
+    private var loginItemStatusDescription: String {
+        switch loginItemStatus {
+        case .enabled:
+            "qBitX will open automatically when you log in."
+        case .requiresApproval:
+            "Allow qBitX in System Settings to finish enabling this option."
+        case .notRegistered:
+            "qBitX opens only when you start it yourself."
+        case .notFound:
+            "Move qBitX to Applications, then reopen it to enable login launch."
+        @unknown default:
+            "Login item status is unavailable."
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        loginItemError = nil
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemStatus = SMAppService.mainApp.status
+        } catch {
+            loginItemStatus = SMAppService.mainApp.status
+            loginItemError = error.localizedDescription
         }
     }
 

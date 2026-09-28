@@ -55,7 +55,12 @@ struct QBitXApp: App {
             MenuBarSpeedView(store: store)
                 .environment(\.locale, store.interfaceLocale.isEmpty ? .current : Locale(identifier: store.interfaceLocale))
         } label: {
-            Label("qBitX", systemImage: "arrow.down.arrow.up.circle")
+            Label {
+                Text("↓ \(store.transferStatus.downloadText)  ↑ \(store.transferStatus.uploadText)")
+            } icon: {
+                Image(systemName: "arrow.down.arrow.up.circle")
+            }
+            .accessibilityLabel("qBitX. Download \(store.transferStatus.downloadText), upload \(store.transferStatus.uploadText)")
         }
         .menuBarExtraStyle(.menu)
     }
