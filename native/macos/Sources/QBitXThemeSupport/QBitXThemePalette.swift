@@ -148,6 +148,14 @@ public struct QBitXThemeColor: Codable, Equatable, Sendable {
 
 public struct QBitXThemePalette: Codable, Equatable, Sendable {
     public static let supportedColorIDs: Set<String> = Set([
+        "Log.TimeStamp",
+        "Log.Normal",
+        "Log.Info",
+        "Log.Warning",
+        "Log.Critical",
+        "Log.BannedPeer",
+        "RSS.ReadArticle",
+        "RSS.UnreadArticle",
         "TransferList.Downloading",
         "TransferList.StalledDownloading",
         "TransferList.DownloadingMetadata",

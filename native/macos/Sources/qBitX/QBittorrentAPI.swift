@@ -174,6 +174,11 @@ actor QBittorrentAPI {
         return try JSONDecoder().decode([LogEntry].self, from: data)
     }
 
+    func peerLog(after id: Int) async throws -> [PeerLogEntry] {
+        let data = try await request("log/peers", query: ["last_known_id": "\(id)"])
+        return try JSONDecoder().decode([PeerLogEntry].self, from: data)
+    }
+
     func enablePeerCountries() async throws {
         let data = try await request("app/preferences")
         let preferences = try JSONDecoder().decode(PeerCountryPreferences.self, from: data)
@@ -1002,6 +1007,14 @@ struct LogEntry: Decodable, Identifiable, Sendable {
     let timestamp: Int64
     let type: Int
     let message: String
+}
+
+struct PeerLogEntry: Decodable, Identifiable, Sendable {
+    let id: Int
+    let timestamp: Int64
+    let ip: String
+    let blocked: Bool
+    let reason: String
 }
 
 private struct PeerCountryPreferences: Decodable {

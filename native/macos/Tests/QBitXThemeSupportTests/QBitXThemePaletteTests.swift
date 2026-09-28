@@ -9,6 +9,8 @@ final class QBitXThemePaletteTests: XCTestCase {
           "colors": {
             "TransferList.Downloading": "#12abef",
             "TransferList.Error": "#cc3300",
+            "Log.Warning": "#ff9900",
+            "RSS.UnreadArticle": "#2255aa",
             "Unsupported.QtWidget": "#ffffff"
           },
           "colors.light": {
@@ -23,10 +25,12 @@ final class QBitXThemePaletteTests: XCTestCase {
 
         let palette = try QBitXThemePalette(configData: Data(config.utf8))
 
-        XCTAssertEqual(palette.colorCount, 3)
+        XCTAssertEqual(palette.colorCount, 5)
         XCTAssertEqual(palette.color(for: "TransferList.Downloading", isDark: false), QBitXThemeColor(qBittorrentValue: "#0080ff"))
         XCTAssertEqual(palette.color(for: "TransferList.Downloading", isDark: true), QBitXThemeColor(qBittorrentValue: "#80402010"))
         XCTAssertEqual(palette.color(for: "TransferList.Error", isDark: true), QBitXThemeColor(qBittorrentValue: "#cc3300"))
+        XCTAssertEqual(palette.color(for: "Log.Warning", isDark: false), QBitXThemeColor(qBittorrentValue: "#ff9900"))
+        XCTAssertEqual(palette.color(for: "RSS.UnreadArticle", isDark: false), QBitXThemeColor(qBittorrentValue: "#2255aa"))
         XCTAssertNil(palette.color(for: "Unsupported.QtWidget", isDark: false))
     }
 

@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import QBitXThemeSupport
 
 struct StatisticsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -62,10 +64,26 @@ struct StatisticsView: View {
     }
 }
 
+private enum ExecutionLogTab: String, CaseIterable, Identifiable, Hashable {
+    case general = "General"
+    case blockedIPs = "Blocked IPs"
+
+    var id: Self { self }
+}
+
 struct ExecutionLogView: View {
+    private let maximumVisibleEntries = 20_000
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
     let store: TorrentStore
     @State private var entries: [LogEntry] = []
+    @State private var peerEntries: [PeerLogEntry] = []
+    @State private var selectedTab = ExecutionLogTab.general
+    @State private var selectedEntryIDs: Set<Int> = []
+    @State private var selectedPeerEntryIDs: Set<Int> = []
+    @State private var lastMainLogID = -1
+    @State private var lastPeerLogID = -1
     @State private var searchText = ""
     @State private var errorMessage: String?
     @State private var showNormal = true
@@ -74,45 +92,130 @@ struct ExecutionLogView: View {
     @State private var showCritical = true
 
     private var visibleEntries: [LogEntry] {
-        entries.filter { searchText.isEmpty || $0.message.localizedCaseInsensitiveContains(searchText) }
+        entries.filter { entry in
+            let matchesType = switch entry.type {
+            case 0x1: showNormal
+            case 0x2: showInfo
+            case 0x4: showWarnings
+            case 0x8: showCritical
+            default: false
+            }
+            return matchesType && (searchText.isEmpty || entry.message.localizedCaseInsensitiveContains(searchText))
+        }
+    }
+
+    private var visiblePeerEntries: [PeerLogEntry] {
+        peerEntries.filter {
+            searchText.isEmpty
+                || $0.ip.localizedCaseInsensitiveContains(searchText)
+                || $0.reason.localizedCaseInsensitiveContains(searchText)
+                || ($0.blocked ? "Blocked" : "Banned").localizedCaseInsensitiveContains(searchText)
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Execution Log").font(.title2.weight(.semibold))
-                Spacer()
-                TextField("Filter messages…", text: $searchText)
-                    .textFieldStyle(.roundedBorder).frame(width: 190)
-                Menu("Message Types") {
-                    Toggle("Normal", isOn: $showNormal)
-                    Toggle("Information", isOn: $showInfo)
-                    Toggle("Warning", isOn: $showWarnings)
-                    Toggle("Critical", isOn: $showCritical)
+            VStack(spacing: 10) {
+                HStack {
+                    Text("Execution Log").font(.title2.weight(.semibold))
+                    Spacer()
+                    Picker("Log", selection: $selectedTab) {
+                        ForEach(ExecutionLogTab.allCases) { tab in Text(tab.rawValue).tag(tab) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 190)
+                    Button("Done") { dismiss() }
                 }
-                Button("Done") { dismiss() }
+                HStack {
+                    TextField("Filter messages…", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                    if selectedTab == .general {
+                        Menu("Message Types") {
+                            Toggle("Normal", isOn: $showNormal)
+                            Toggle("Information", isOn: $showInfo)
+                            Toggle("Warning", isOn: $showWarnings)
+                            Toggle("Critical", isOn: $showCritical)
+                        }
+                    }
+                    Spacer()
+                    Button { copySelectedEntries() } label: { Image(systemName: "doc.on.doc") }
+                        .buttonStyle(.glass)
+                        .help("Copy selected entries")
+                        .accessibilityLabel("Copy selected entries")
+                        .disabled(selectedTab == .general ? selectedEntryIDs.isEmpty : selectedPeerEntryIDs.isEmpty)
+                    Button { clearVisibleEntries() } label: { Image(systemName: "trash") }
+                        .buttonStyle(.glass)
+                        .help("Clear visible log entries")
+                        .accessibilityLabel("Clear visible log entries")
+                }
             }
-            .padding(16)
+            .padding(12)
             Divider()
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red).padding(10) }
-            List(visibleEntries) { entry in
-                HStack(alignment: .top, spacing: 12) {
-                    Text(Date(timeIntervalSince1970: TimeInterval(entry.timestamp) / 1_000).formatted(date: .omitted, time: .standard))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 90, alignment: .leading)
-                    Text(entry.message).textSelection(.enabled)
+            switch selectedTab {
+            case .general:
+                List(visibleEntries, selection: $selectedEntryIDs) { entry in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(timestamp(entry.timestamp))
+                            .foregroundStyle(themeColor(for: "Log.TimeStamp") ?? Color.primary.opacity(0.6))
+                            .frame(width: 90, alignment: .leading)
+                        Text(entry.message)
+                            .foregroundStyle(messageColor(for: entry.type))
+                            .textSelection(.enabled)
+                    }
+                    .font(.caption)
+                    .tag(entry.id)
+                    .contextMenu {
+                        Button("Copy") { copyMainEntries(entriesToCopy(focusedID: entry.id)) }
+                        Button("Clear") { clearMainEntries() }
+                    }
                 }
-                .font(.caption)
+            case .blockedIPs:
+                List(visiblePeerEntries, selection: $selectedPeerEntryIDs) { entry in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(timestamp(entry.timestamp))
+                            .foregroundStyle(themeColor(for: "Log.TimeStamp") ?? Color.primary.opacity(0.6))
+                            .frame(width: 90, alignment: .leading)
+                        Text(entry.ip)
+                            .foregroundStyle(themeColor(for: "Log.BannedPeer") ?? .primary)
+                            .frame(minWidth: 130, alignment: .leading)
+                        Text(entry.blocked ? "Blocked" : "Banned")
+                            .foregroundStyle(themeColor(for: "Log.BannedPeer") ?? .primary)
+                            .frame(width: 90, alignment: .leading)
+                        Text(entry.reason)
+                            .foregroundStyle(themeColor(for: "Log.BannedPeer") ?? .primary)
+                            .textSelection(.enabled)
+                    }
+                    .font(.caption)
+                    .tag(entry.id)
+                    .contextMenu {
+                        Button("Copy") { copyPeerEntries(peerEntriesToCopy(focusedID: entry.id)) }
+                        Button("Clear") { clearPeerEntries() }
+                    }
+                }
             }
         }
         .frame(width: 780, height: 520)
-        .task(id: "\(showNormal)|\(showInfo)|\(showWarnings)|\(showCritical)") {
-            entries = []
+        .task(id: selectedTab) {
+            errorMessage = nil
             while !Task.isCancelled {
                 do {
-                    let latest = try await store.mainLog(after: entries.last?.id ?? -1, normal: showNormal, info: showInfo, warning: showWarnings, critical: showCritical)
-                    entries.append(contentsOf: latest)
-                    if entries.count > 2_000 { entries.removeFirst(entries.count - 2_000) }
+                    switch selectedTab {
+                    case .general:
+                        let latest = try await store.mainLog(after: lastMainLogID)
+                        if let newestID = latest.map(\.id).max() {
+                            lastMainLogID = max(lastMainLogID, newestID)
+                            entries.append(contentsOf: latest)
+                            if entries.count > maximumVisibleEntries { entries.removeFirst(entries.count - maximumVisibleEntries) }
+                        }
+                    case .blockedIPs:
+                        let latest = try await store.peerLog(after: lastPeerLogID)
+                        if let newestID = latest.map(\.id).max() {
+                            lastPeerLogID = max(lastPeerLogID, newestID)
+                            peerEntries.append(contentsOf: latest)
+                            if peerEntries.count > maximumVisibleEntries { peerEntries.removeFirst(peerEntries.count - maximumVisibleEntries) }
+                        }
+                    }
                     errorMessage = nil
                     try await Task.sleep(for: .seconds(2))
                 } catch is CancellationError { return }
@@ -122,5 +225,89 @@ struct ExecutionLogView: View {
                 }
             }
         }
+    }
+
+    private func timestamp(_ value: Int64) -> String {
+        Date(timeIntervalSince1970: TimeInterval(value)).formatted(date: .omitted, time: .standard)
+    }
+
+    private func themeColor(for id: String) -> Color? {
+        guard let color = QBitXThemePalette(storedJSON: themePaletteJSON)?
+            .color(for: id, isDark: colorScheme == .dark)
+        else { return nil }
+        return Color(red: color.red, green: color.green, blue: color.blue, opacity: color.alpha)
+    }
+
+    private func messageColor(for type: Int) -> Color {
+        let colorID: String
+        let fallback: Color
+        switch type {
+        case 0x2:
+            colorID = "Log.Info"
+            fallback = .blue
+        case 0x4:
+            colorID = "Log.Warning"
+            fallback = .orange
+        case 0x8:
+            colorID = "Log.Critical"
+            fallback = .red
+        default:
+            colorID = "Log.Normal"
+            fallback = .primary
+        }
+        return themeColor(for: colorID) ?? fallback
+    }
+
+    private func clearVisibleEntries() {
+        if selectedTab == .general { clearMainEntries() }
+        else { clearPeerEntries() }
+    }
+
+    private func clearMainEntries() {
+        entries = []
+        selectedEntryIDs = []
+    }
+
+    private func clearPeerEntries() {
+        peerEntries = []
+        selectedPeerEntryIDs = []
+    }
+
+    private func entriesToCopy(focusedID: Int) -> [LogEntry] {
+        let selected = selectedEntryIDs.isEmpty || !selectedEntryIDs.contains(focusedID)
+            ? [focusedID]
+            : Array(selectedEntryIDs)
+        return entries.filter { selected.contains($0.id) }
+    }
+
+    private func peerEntriesToCopy(focusedID: Int) -> [PeerLogEntry] {
+        let selected = selectedPeerEntryIDs.isEmpty || !selectedPeerEntryIDs.contains(focusedID)
+            ? [focusedID]
+            : Array(selectedPeerEntryIDs)
+        return peerEntries.filter { selected.contains($0.id) }
+    }
+
+    private func copySelectedEntries() {
+        if selectedTab == .general {
+            copyMainEntries(entries.filter { selectedEntryIDs.contains($0.id) })
+        } else {
+            copyPeerEntries(peerEntries.filter { selectedPeerEntryIDs.contains($0.id) })
+        }
+    }
+
+    private func copyMainEntries(_ values: [LogEntry]) {
+        let content = values.map { "\(timestamp($0.timestamp))\t\($0.message)" }.joined(separator: "\n")
+        guard !content.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+    }
+
+    private func copyPeerEntries(_ values: [PeerLogEntry]) {
+        let content = values.map {
+            "\(timestamp($0.timestamp))\t\($0.ip)\t\($0.blocked ? "Blocked" : "Banned")\t\($0.reason)"
+        }.joined(separator: "\n")
+        guard !content.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
     }
 }

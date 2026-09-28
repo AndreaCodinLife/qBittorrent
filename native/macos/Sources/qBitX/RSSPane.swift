@@ -1,7 +1,10 @@
 import SwiftUI
+import QBitXThemeSupport
 
 struct RSSPane: View {
     let store: TorrentStore
+    @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
+    @Environment(\.colorScheme) private var colorScheme
     @State private var feeds: [RSSFeed] = []
     @State private var selectedFeedID: String?
     @State private var showsAddFeed = false
@@ -111,8 +114,14 @@ struct RSSPane: View {
                     } else {
                         List(visibleArticles) { article in
                             HStack(spacing: 12) {
+                                Image(systemName: article.isRead ? "circle" : "circle.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(articleColor(for: article))
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(article.title).fontWeight(article.isRead ? .regular : .semibold)
+                                    Text(article.title)
+                                        .fontWeight(article.isRead ? .regular : .semibold)
+                                        .foregroundStyle(articleColor(for: article))
                                     Text(article.date).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -315,5 +324,17 @@ struct RSSPane: View {
     private func markRead(_ feed: RSSFeed) async {
         do { try await store.markRSSFeedRead(path: feed.path); await reload() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    private func articleColor(for article: RSSArticle) -> Color {
+        let colorID = article.isRead ? "RSS.ReadArticle" : "RSS.UnreadArticle"
+        return themeColor(for: colorID) ?? (article.isRead ? Color.primary.opacity(0.65) : Color.accentColor)
+    }
+
+    private func themeColor(for id: String) -> Color? {
+        guard let color = QBitXThemePalette(storedJSON: themePaletteJSON)?
+            .color(for: id, isDark: colorScheme == .dark)
+        else { return nil }
+        return Color(red: color.red, green: color.green, blue: color.blue, opacity: color.alpha)
     }
 }

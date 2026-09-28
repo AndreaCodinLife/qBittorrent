@@ -273,6 +273,11 @@ final class TorrentStore {
         return try await api.mainLog(after: id, normal: normal, info: info, warning: warning, critical: critical)
     }
 
+    func peerLog(after id: Int) async throws -> [PeerLogEntry] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.peerLog(after: id)
+    }
+
     func setPreference(key: String, jsonValue: String) async throws {
         guard let api else { throw TorrentStoreError.disconnected }
         try await api.setPreference(key: key, jsonValue: jsonValue)
