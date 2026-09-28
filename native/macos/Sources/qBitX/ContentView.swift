@@ -596,7 +596,9 @@ struct ContentView: View {
                             if mainTab == .transfers {
                                 if showDetailPane {
                                     VSplitView {
-                                        torrentTable.frame(minHeight: 240)
+                                        torrentTable
+                                            .frame(minHeight: 240)
+                                            .background(PersistedSplitViewPosition(name: "qBitX.Transfers.Details"))
                                         detailsPane.frame(minHeight: 170)
                                     }
                                 } else {

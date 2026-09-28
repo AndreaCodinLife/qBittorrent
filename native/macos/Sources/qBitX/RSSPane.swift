@@ -201,6 +201,7 @@ struct RSSPane: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
             .frame(minWidth: 190, idealWidth: 230)
+            .background(PersistedSplitViewPosition(name: "qBitX.RSS.Feeds"))
             VStack(spacing: 0) {
                 if rssProcessingEnabled == false {
                     Label("RSS processing is disabled in qBittorrent preferences.", systemImage: "exclamationmark.triangle.fill")
@@ -285,6 +286,7 @@ struct RSSPane: View {
                             }
                             .listStyle(.plain)
                             .frame(minWidth: 270)
+                            .background(PersistedSplitViewPosition(name: "qBitX.RSS.Articles"))
                             .onChange(of: selectedArticleIDs) { oldIDs, newIDs in
                                 let deselectedIDs = oldIDs.subtracting(newIDs)
                                 let deselected = feeds.flatMap(\.articles).filter { deselectedIDs.contains($0.selectionID) }
