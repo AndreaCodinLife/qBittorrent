@@ -112,6 +112,120 @@ private struct PendingDuplicateTorrent: Identifiable {
     let webSeeds: [String]
 }
 
+private struct TrackerTableRow: Identifiable {
+    let tracker: TorrentTracker
+    let endpoint: TorrentTrackerEndpoint?
+    let children: [TrackerTableRow]?
+
+    init(tracker: TorrentTracker, endpoint: TorrentTrackerEndpoint?, children: [TrackerTableRow]? = nil) {
+        self.tracker = tracker
+        self.endpoint = endpoint
+        self.children = children
+    }
+
+    var id: String {
+        guard let endpoint else { return "tracker:\(tracker.url)" }
+        return "endpoint:\(tracker.url):\(endpoint.id)"
+    }
+    var flattened: [TrackerTableRow] { [self] + (children ?? []).flatMap(\.flattened) }
+    var urlSortValue: String { endpoint?.name ?? tracker.url }
+    var tierSortValue: Int { endpoint == nil ? (tracker.tier ?? -1) : -1 }
+    var protocolSortValue: Int { endpoint?.bt_version ?? -1 }
+    var statusSortValue: Int { endpoint.map { $0.status ?? -1 } ?? tracker.status ?? -1 }
+    var isUpdating: Bool { endpoint.map { $0.updating ?? false } ?? tracker.updating ?? false }
+    var peersSortValue: Int { endpoint.map { $0.num_peers ?? -1 } ?? tracker.num_peers ?? -1 }
+    var seedsSortValue: Int { endpoint.map { $0.num_seeds ?? -1 } ?? tracker.num_seeds ?? -1 }
+    var leechesSortValue: Int { endpoint.map { $0.num_leeches ?? -1 } ?? tracker.num_leeches ?? -1 }
+    var downloadedSortValue: Int { endpoint.map { $0.num_downloaded ?? -1 } ?? tracker.num_downloaded ?? -1 }
+    var messageSortValue: String { endpoint.map { $0.msg ?? "" } ?? tracker.msg ?? "" }
+    var nextAnnounceSortValue: Int64 { endpoint.map { $0.next_announce ?? -1 } ?? tracker.next_announce ?? -1 }
+    var minAnnounceSortValue: Int64 { endpoint.map { $0.min_announce ?? -1 } ?? tracker.min_announce ?? -1 }
+}
+
+private struct TorrentContentRow: Identifiable {
+    let id: String
+    let name: String
+    let path: String
+    let file: TorrentFile?
+    let children: [TorrentContentRow]?
+
+    var isDirectory: Bool { file == nil }
+    var flattened: [TorrentContentRow] { [self] + (children ?? []).flatMap(\.flattened) }
+    var fileIDs: Set<Int> {
+        var result = Set(file.map { [$0.index] } ?? [])
+        for child in children ?? [] { result.formUnion(child.fileIDs) }
+        return result
+    }
+    var sizeSortValue: Int64 {
+        if let file { return file.size }
+        return (children ?? []).reduce(0) { $0 + $1.sizeSortValue }
+    }
+    var remainingSortValue: Int64 {
+        if let file {
+            guard file.priority != 0 else { return 0 }
+            return Int64(Double(file.size) * max(0, 1 - file.progress))
+        }
+        return (children ?? []).filter { $0.prioritySortValue != 0 }.reduce(0) { $0 + $1.remainingSortValue }
+    }
+    var availabilitySortValue: Double {
+        if let file { return file.size > 0 ? (file.availability ?? -1) : 0 }
+        let activeChildren = (children ?? []).filter { $0.prioritySortValue != 0 }
+        let activeSize = activeChildren.reduce(Int64(0)) { $0 + $1.sizeSortValue }
+        guard activeSize > 0 else { return -1 }
+        let weightedAvailability = activeChildren.reduce(0.0) { total, child in
+            guard child.availabilitySortValue >= 0 else { return total }
+            return total + child.availabilitySortValue * Double(child.sizeSortValue)
+        }
+        return weightedAvailability / Double(activeSize)
+    }
+    var progressSortValue: Double {
+        if let file { return file.size > 0 ? file.progress : 1 }
+        let activeChildren = (children ?? []).filter { $0.prioritySortValue != 0 }
+        let activeSize = activeChildren.reduce(Int64(0)) { $0 + $1.sizeSortValue }
+        guard activeSize > 0 else { return 1 }
+        let completed = activeChildren.reduce(0.0) { $0 + Double($1.sizeSortValue) * $1.progressSortValue }
+        return min(1, completed / Double(activeSize))
+    }
+    var prioritySortValue: Int {
+        if let file { return file.priority }
+        let priorities = Set((children ?? []).flatMap(\.flattened).compactMap { $0.file?.priority })
+        return priorities.count == 1 ? (priorities.first ?? -1) : -1
+    }
+}
+
+private final class TorrentContentNodeBuilder {
+    let name: String
+    let path: String
+    var file: TorrentFile?
+    var childOrder: [String] = []
+    var children: [String: TorrentContentNodeBuilder] = [:]
+
+    init(name: String, path: String) {
+        self.name = name
+        self.path = path
+    }
+
+    func child(named name: String) -> TorrentContentNodeBuilder {
+        if let child = children[name] { return child }
+        let childPath = path.isEmpty ? name : "\(path)/\(name)"
+        let child = TorrentContentNodeBuilder(name: name, path: childPath)
+        children[name] = child
+        childOrder.append(name)
+        return child
+    }
+
+    func makeRow() -> TorrentContentRow {
+        let childRows = childOrder.compactMap { children[$0]?.makeRow() }
+        return TorrentContentRow(
+            id: file.map { "file:\($0.index)" } ?? "folder:\(path)",
+            name: name,
+            path: path,
+            file: file,
+            children: childRows.isEmpty ? nil : childRows
+        )
+    }
+}
+
 struct ContentView: View {
     @Bindable var store: TorrentStore
     @Bindable var programUpdateChecker: ProgramUpdateState
@@ -126,6 +240,7 @@ struct ContentView: View {
     @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
+    @AppStorage("qBitX.contentFileFilterMode") private var contentFileFilterMode = "wildcards"
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.appearance") private var appearance = "system"
@@ -158,8 +273,14 @@ struct ContentView: View {
     @State private var selectedTorrentIDs: Set<String> = []
     @SceneStorage("qBitX.transferColumns") private var columnCustomization = TableColumnCustomization<Torrent>()
     @SceneStorage("qBitX.peerColumns") private var peerColumnCustomization = TableColumnCustomization<TorrentPeer>()
+    @SceneStorage("qBitX.trackerColumns") private var trackerColumnCustomization = TableColumnCustomization<TrackerTableRow>()
+    @SceneStorage("qBitX.contentColumns") private var contentColumnCustomization = TableColumnCustomization<TorrentContentRow>()
     @State private var selectedPeerIDs: Set<String> = []
+    @State private var selectedTrackerRowIDs: Set<String> = []
     @State private var peerSortOrder = [KeyPathComparator<TorrentPeer>(\.ip)]
+    @State private var trackerSortOrder = [KeyPathComparator<TrackerTableRow>(\.urlSortValue)]
+    @State private var contentSortOrder = [KeyPathComparator<TorrentContentRow>(\.name)]
+    @State private var contentFileFilter = ""
     @State private var textAction: TorrentTextAction?
     @State private var detailInput: DetailInput?
     @State private var statusFilter: TorrentFilter = .all
@@ -234,7 +355,7 @@ struct ContentView: View {
     @State private var files: [TorrentFile] = []
     @State private var peers: [TorrentPeer] = []
     @State private var webSeeds: [TorrentWebSeed] = []
-    @State private var selectedFileIDs: Set<Int> = []
+    @State private var selectedContentNodeIDs: Set<String> = []
 
     private var torrents: [Torrent] { store.torrents }
     private var torrentCompletionSnapshot: TorrentCompletionSnapshot { TorrentCompletionSnapshot(torrents) }
@@ -325,6 +446,38 @@ struct ContentView: View {
 
     private var selectedTorrent: Torrent? {
         torrents.first { $0.id == selectedTorrentID }
+    }
+
+    private var filteredContentFiles: [TorrentFile] {
+        guard !contentFileFilter.isEmpty else { return files }
+        return files.filter { filePathMatches($0.name, pattern: contentFileFilter, mode: contentFileFilterMode) }
+    }
+    private var filteredContentRows: [TorrentContentRow] {
+        let root = TorrentContentNodeBuilder(name: "", path: "")
+        for file in filteredContentFiles {
+            let components = file.name.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            guard let last = components.last else { continue }
+            var node = root
+            for component in components.dropLast() { node = node.child(named: component) }
+            node.child(named: last).file = file
+        }
+        return root.childOrder.compactMap { root.children[$0]?.makeRow() }
+    }
+    private var filteredContentNodeIDs: Set<String> {
+        Set(filteredContentRows.flatMap(\.flattened).map(\.id))
+    }
+    private var selectedFileIDs: Set<Int> {
+        filteredContentRows.flatMap(\.flattened)
+            .filter { selectedContentNodeIDs.contains($0.id) }
+            .reduce(into: Set<Int>()) { $0.formUnion($1.fileIDs) }
+    }
+
+    private func selectAllFilteredContentFiles() {
+        selectedContentNodeIDs.formUnion(filteredContentRows.flatMap(\.flattened).compactMap { $0.file == nil ? nil : $0.id })
+    }
+
+    private func deselectFilteredContent() {
+        selectedContentNodeIDs.subtract(filteredContentNodeIDs)
     }
 
     private var appColorSchemePreference: ColorScheme? {
@@ -425,6 +578,7 @@ struct ContentView: View {
         .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }
         .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)") {
             selectedPeerIDs = []
+            selectedTrackerRowIDs = []
             await loadDetails()
         }
         .onChange(of: torrents.map(\.id)) { _, ids in
@@ -1640,104 +1794,125 @@ struct ContentView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 10) {
-                        trackerHeader("Tier", width: 46)
-                        trackerHeader("URL / Endpoint", width: 260)
-                        trackerHeader("Status", width: 120)
-                        trackerHeader("Peers", width: 55)
-                        trackerHeader("Seeds", width: 55)
-                        trackerHeader("Leeches", width: 60)
-                        trackerHeader("Downloaded", width: 80)
-                        trackerHeader("Next Announce", width: 105)
-                        trackerHeader("Min Announce", width: 105)
-                        trackerHeader("Message", width: 260)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    Divider()
-                    ForEach(trackers) { tracker in
-                        trackerRow(tracker)
-                        ForEach(tracker.endpoints ?? []) { endpoint in
-                            HStack(spacing: 10) {
-                                Text("↳").frame(width: 46, alignment: .leading)
-                                    .foregroundStyle(.tertiary)
-                                trackerCell(endpoint.name, width: 260)
-                                trackerCell(trackerStatusText(endpoint.status, updating: endpoint.updating), width: 120)
-                                trackerCell(countText(endpoint.num_peers), width: 55)
-                                trackerCell(countText(endpoint.num_seeds), width: 55)
-                                trackerCell(countText(endpoint.num_leeches), width: 60)
-                                trackerCell(countText(endpoint.num_downloaded), width: 80)
-                                trackerCell(announceText(endpoint.next_announce), width: 105)
-                                trackerCell(announceText(endpoint.min_announce), width: 105)
-                                trackerCell(endpoint.msg ?? "", width: 260)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.secondary.opacity(0.04))
-                        }
-                    }
+            if trackerRows.isEmpty {
+                ContentUnavailableView("No Trackers", systemImage: "antenna.radiowaves.left.and.right", description: Text("This torrent has no trackers or peer discovery endpoints."))
+            } else {
+                Table(trackerRows, children: \.children, selection: $selectedTrackerRowIDs, sortOrder: $trackerSortOrder, columnCustomization: $trackerColumnCustomization) {
+                    trackerPrimaryColumns
+                    trackerDetailColumns
                 }
+                .contextMenu(forSelectionType: String.self) { target in
+                    trackerContextMenu(for: target)
+                }
+                .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
             }
         }
     }
 
-    private func trackerRow(_ tracker: TorrentTracker) -> some View {
-        HStack(spacing: 10) {
-            trackerCell(tracker.tier.map { $0 < 0 ? "—" : "\($0 + 1)" } ?? "—", width: 46)
-            trackerCell(tracker.url, width: 260)
-            trackerCell(trackerStatusText(tracker.status, updating: tracker.updating), width: 120)
-            trackerCell(countText(tracker.num_peers), width: 55)
-            trackerCell(countText(tracker.num_seeds), width: 55)
-            trackerCell(countText(tracker.num_leeches), width: 60)
-            trackerCell(countText(tracker.num_downloaded), width: 80)
-            trackerCell(announceText(tracker.next_announce), width: 105)
-            trackerCell(announceText(tracker.min_announce), width: 105)
-            trackerCell(tracker.msg ?? "", width: 260)
+    private var trackerRows: [TrackerTableRow] {
+        trackers.map { tracker in
+            TrackerTableRow(
+                tracker: tracker,
+                endpoint: nil,
+                children: tracker.endpoints?.map { TrackerTableRow(tracker: tracker, endpoint: $0) }
+            )
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .contextMenu {
-            if (tracker.tier ?? -1) >= 0 {
-                Button("Edit URL…") { showDetailInput(.editTracker(tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: tracker.url) }
-                Menu("Move to Tier") {
-                    ForEach(availableTrackerTiers, id: \.self) { tier in
-                        Button("Tier \(tier + 1)\(tier == (tracker.tier ?? 0) ? " ✓" : "")") {
-                            Task { await performDetailAction { try await store.moveTracker(hash: $0, url: tracker.url, tier: tier) } }
-                        }
+    }
+    private var allTrackerRows: [TrackerTableRow] { trackerRows.flatMap(\.flattened) }
+
+    @TableColumnBuilder<TrackerTableRow, KeyPathComparator<TrackerTableRow>>
+    private var trackerPrimaryColumns: some TableColumnContent<TrackerTableRow, KeyPathComparator<TrackerTableRow>> {
+        TableColumn("URL/Announce Endpoint", value: \.urlSortValue) { row in
+            HStack(spacing: 6) {
+                if row.endpoint != nil { Text("↳").foregroundStyle(.tertiary) }
+                Text(row.urlSortValue).lineLimit(1).help(row.urlSortValue)
+            }
+            .onTapGesture(count: 2) {
+                guard row.endpoint == nil, row.tierSortValue >= 0 else { return }
+                showDetailInput(.editTracker(row.tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: row.tracker.url)
+            }
+        }
+        .width(min: 220, ideal: 320)
+        .customizationID("tracker.url")
+        TableColumn("Tier", value: \.tierSortValue) { row in
+            Text(row.tierSortValue < 0 ? "—" : "\(row.tierSortValue + 1)")
+        }
+        .width(min: 45, ideal: 60)
+        .customizationID("tracker.tier")
+        TableColumn("BT Protocol", value: \.protocolSortValue) { row in
+            Text(row.protocolSortValue < 0 ? "—" : "v\(row.protocolSortValue)")
+        }
+        .width(min: 70, ideal: 90)
+        .customizationID("tracker.protocol")
+        TableColumn("Status", value: \.statusSortValue) { row in
+            Text(trackerStatusText(row.statusSortValue, updating: row.isUpdating))
+        }
+        .width(min: 100, ideal: 135)
+        .customizationID("tracker.status")
+        TableColumn("Peers", value: \.peersSortValue) { row in Text(countText(row.peersSortValue)) }
+            .width(min: 50, ideal: 65).customizationID("tracker.peers")
+        TableColumn("Seeds", value: \.seedsSortValue) { row in Text(countText(row.seedsSortValue)) }
+            .width(min: 50, ideal: 65).customizationID("tracker.seeds")
+        TableColumn("Leeches", value: \.leechesSortValue) { row in Text(countText(row.leechesSortValue)) }
+            .width(min: 55, ideal: 70).customizationID("tracker.leeches")
+    }
+
+    @TableColumnBuilder<TrackerTableRow, KeyPathComparator<TrackerTableRow>>
+    private var trackerDetailColumns: some TableColumnContent<TrackerTableRow, KeyPathComparator<TrackerTableRow>> {
+        TableColumn("Times Downloaded", value: \.downloadedSortValue) { row in Text(countText(row.downloadedSortValue)) }
+            .width(min: 95, ideal: 125).customizationID("tracker.downloaded")
+        TableColumn("Message", value: \.messageSortValue) { row in Text(row.messageSortValue).lineLimit(1).help(row.messageSortValue) }
+            .width(min: 160, ideal: 250).customizationID("tracker.message")
+        TableColumn("Next Announce", value: \.nextAnnounceSortValue) { row in Text(announceText(row.nextAnnounceSortValue)) }
+            .width(min: 90, ideal: 120).customizationID("tracker.nextAnnounce")
+        TableColumn("Min Announce", value: \.minAnnounceSortValue) { row in Text(announceText(row.minAnnounceSortValue)) }
+            .width(min: 90, ideal: 120).customizationID("tracker.minAnnounce")
+    }
+
+    @ViewBuilder
+    private func trackerContextMenu(for target: Set<String>) -> some View {
+        let rows = allTrackerRows.filter { target.contains($0.id) }
+        let selectedTrackers = rows.filter { $0.endpoint == nil && $0.tierSortValue >= 0 }
+        let urlsToCopy = rows.map(\.urlSortValue).filter { !$0.isEmpty }
+        Button("Add Tracker…") {
+            showDetailInput(.addTracker, title: "Add Tracker", hint: "Tracker URL")
+        }
+        Button("Edit URL…") {
+            guard let tracker = selectedTrackers.first else { return }
+            showDetailInput(.editTracker(tracker.tracker.url), title: "Edit Tracker", hint: "Tracker URL", initialValue: tracker.tracker.url)
+        }
+        .disabled(selectedTrackers.count != 1)
+        if selectedTrackers.count == 1, let tracker = selectedTrackers.first {
+            Menu("Move to Tier") {
+                ForEach(availableTrackerTiers, id: \.self) { tier in
+                    Button("Tier \(tier + 1)\(tier == (tracker.tracker.tier ?? 0) ? " ✓" : "")") {
+                        Task { await performDetailAction { try await store.moveTracker(hash: $0, url: tracker.tracker.url, tier: tier) } }
                     }
                 }
-                Button("Remove Tracker", role: .destructive) {
-                    Task { await performDetailAction { try await store.removeTracker(hash: $0, url: tracker.url) } }
-                }
-            }
-            if !(tracker.url.hasPrefix("** [")) {
-                Button("Copy URL") { copyToPasteboard(tracker.url) }
-            }
-            if (tracker.tier ?? -1) >= 0, selectedTorrent?.state != .paused {
-                Button("Force Reannounce to This Tracker") {
-                    Task { await performDetailAction { try await store.reannounceTrackers(hash: $0, urls: [tracker.url]) } }
-                }
-            }
-            if selectedTorrent?.state != .paused {
-                Button("Force Reannounce to All Trackers") {
-                    Task { await performDetailAction { try await store.command(.reannounce, hashes: [$0]) } }
-                }
             }
         }
-        .font(.caption)
-    }
-
-    private func trackerHeader(_ text: String, width: CGFloat) -> some View {
-        Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            .frame(width: width, alignment: .leading)
-    }
-
-    private func trackerCell(_ text: String, width: CGFloat) -> some View {
-        Text(text.isEmpty ? "—" : text).lineLimit(1).help(text)
-            .frame(width: width, alignment: .leading)
+        Button(selectedTrackers.count > 1 ? "Remove Trackers" : "Remove Tracker", role: .destructive) {
+            guard let hash = selectedTorrentID else { return }
+            Task {
+                do {
+                    try await store.removeTrackers(hashes: [hash], urls: selectedTrackers.map { $0.tracker.url })
+                    await loadDetails()
+                } catch { actionError = error.localizedDescription }
+            }
+        }
+        .disabled(selectedTrackers.isEmpty)
+        Button("Copy URL") { copyToPasteboard(urlsToCopy.joined(separator: "\n")) }
+            .disabled(urlsToCopy.isEmpty)
+        if !selectedTrackers.isEmpty, selectedTorrent?.state != .paused {
+            Button("Force Reannounce to Selected") {
+                Task { await performDetailAction { try await store.reannounceTrackers(hash: $0, urls: selectedTrackers.map { $0.tracker.url }) } }
+            }
+        }
+        if selectedTorrent?.state != .paused {
+            Button("Force Reannounce to All Trackers") {
+                Task { await performDetailAction { try await store.command(.reannounce, hashes: [$0]) } }
+            }
+        }
     }
 
     private func countText(_ count: Int?) -> String {
@@ -1774,10 +1949,26 @@ struct ContentView: View {
                 Spacer()
                 Button("Manage Content…") { openContentLayoutEditor(for: selectedTorrent) }
                     .disabled(selectedTorrent == nil || selectedTorrentIDs.count != 1)
-                Button("Select All") { selectedFileIDs = Set(files.map(\.id)) }
+                TextField("Filter files…", text: $contentFileFilter)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 210)
+                    .accessibilityLabel("Filter torrent files")
+                Menu("Pattern Format") {
+                    Button { contentFileFilterMode = "plainText" } label: {
+                        patternFormatLabel("Plain text", mode: "plainText")
+                    }
+                    Button { contentFileFilterMode = "wildcards" } label: {
+                        patternFormatLabel("Wildcards", mode: "wildcards")
+                    }
+                    Button { contentFileFilterMode = "regex" } label: {
+                        patternFormatLabel("Regular expression", mode: "regex")
+                    }
+                }
+                .help("Choose how the file filter is interpreted")
+                Button("Select All", action: selectAllFilteredContentFiles)
                     .disabled(files.isEmpty)
-                Button("Select None") { selectedFileIDs = [] }
-                    .disabled(selectedFileIDs.isEmpty)
+                Button("Select None", action: deselectFilteredContent)
+                    .disabled(selectedContentNodeIDs.isDisjoint(with: filteredContentNodeIDs))
                 Menu("Priority") { filePriorityActions(for: selectedFileIDs) }
                     .disabled(selectedFileIDs.isEmpty)
             }
@@ -1786,55 +1977,95 @@ struct ContentView: View {
             if files.isEmpty {
                 ContentUnavailableView("No Files", systemImage: "doc.text", description: Text("File information is unavailable until torrent metadata has loaded."))
             } else {
-                VStack(spacing: 0) {
-                    HStack {
-                        peerColumnHeader("Name", width: 520)
-                        peerColumnHeader("Size", width: 100)
-                        peerColumnHeader("Availability", width: 100)
-                        peerColumnHeader("Progress", width: 80)
-                        peerColumnHeader("Priority", width: 110)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    Divider()
-                    List(files, selection: $selectedFileIDs) { file in
-                        let row = HStack(spacing: 12) {
-                            Text(file.name).lineLimit(1).frame(width: 520, alignment: .leading)
-                            Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
-                                .frame(width: 100, alignment: .leading)
-                            Text(file.availability.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "—")
-                                .frame(width: 100, alignment: .leading)
-                            Text(file.progress.formatted(.percent.precision(.fractionLength(0))))
-                                .frame(width: 80, alignment: .leading)
-                            Text(filePriorityLabel(file.priority))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 110, alignment: .leading)
-                        }
-                        .font(.caption)
-                        .tag(file.id)
-                        .onTapGesture(count: 2) {
-                            if let torrent = selectedTorrent { openTorrentFile(file, in: torrent) }
-                        }
-                        .contextMenu {
-                            if let torrent = selectedTorrent, isPreviewable(file) {
-                                Button("Preview File") { openTorrentFile(file, in: torrent) }
-                                    .disabled(!torrentFileExists(file, in: torrent))
-                            }
-                            filePriorityActions(for: selectedFileIDs.contains(file.id) ? selectedFileIDs : [file.id])
-                            Button("Rename…") { showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent) }
-                        }
-                        if dragContentFiles,
-                           store.usesBundledBackend,
-                           let torrent = selectedTorrent,
-                           torrentFileExists(file, in: torrent) {
-                            row.draggable(torrentFileURL(file, in: torrent))
-                        } else {
-                            row
-                        }
-                    }
-                    .listStyle(.inset)
+                Table(filteredContentRows, children: \.children, selection: $selectedContentNodeIDs, sortOrder: $contentSortOrder, columnCustomization: $contentColumnCustomization) {
+                    contentFileColumns
                 }
+                .contextMenu(forSelectionType: String.self) { target in
+                    contentFileContextMenu(for: target)
+                }
+                .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
             }
+        }
+    }
+
+    @TableColumnBuilder<TorrentContentRow, KeyPathComparator<TorrentContentRow>>
+    private var contentFileColumns: some TableColumnContent<TorrentContentRow, KeyPathComparator<TorrentContentRow>> {
+        TableColumn("Name", value: \.name) { row in contentFileNameCell(row) }
+            .width(min: 250, ideal: 520).customizationID("content.name")
+        TableColumn("Total Size", value: \.sizeSortValue) { row in
+            Text(ByteCountFormatter.string(fromByteCount: row.sizeSortValue, countStyle: .file))
+        }
+        .width(min: 75, ideal: 100)
+        .customizationID("content.size")
+        TableColumn("Progress", value: \.progressSortValue) { row in
+            Text(row.progressSortValue.formatted(.percent.precision(.fractionLength(1))))
+        }
+        .width(min: 70, ideal: 85)
+        .customizationID("content.progress")
+        TableColumn("Download Priority", value: \.prioritySortValue) { row in
+            Text(row.prioritySortValue < 0 ? "Mixed" : filePriorityLabel(row.prioritySortValue)).foregroundStyle(.secondary)
+        }
+        .width(min: 90, ideal: 110)
+        .customizationID("content.priority")
+        TableColumn("Remaining", value: \.remainingSortValue) { row in
+            Text(ByteCountFormatter.string(fromByteCount: row.remainingSortValue, countStyle: .file))
+        }
+        .width(min: 75, ideal: 100)
+        .customizationID("content.remaining")
+        TableColumn("Availability", value: \.availabilitySortValue) { row in
+            Text(row.availabilitySortValue >= 0 ? (row.availabilitySortValue * 100).formatted(.number.precision(.fractionLength(1))) + "%" : "N/A")
+        }
+        .width(min: 75, ideal: 100)
+        .customizationID("content.availability")
+    }
+
+    @ViewBuilder
+    private func contentFileNameCell(_ row: TorrentContentRow) -> some View {
+        if row.isDirectory {
+            Label(row.name, systemImage: "folder")
+                .lineLimit(1)
+                .help(row.path)
+        } else if let file = row.file, dragContentFiles,
+           store.usesBundledBackend,
+           let torrent = selectedTorrent,
+           torrentFileExists(file, in: torrent) {
+            Text(file.name)
+                .lineLimit(1)
+                .help(file.name)
+                .onTapGesture(count: 2) { openTorrentFile(file, in: torrent) }
+                .draggable(torrentFileURL(file, in: torrent))
+        } else if let file = row.file {
+            Text(file.name)
+                .lineLimit(1)
+                .help(file.name)
+                .onTapGesture(count: 2) {
+                    if let torrent = selectedTorrent { openTorrentFile(file, in: torrent) }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func contentFileContextMenu(for target: Set<String>) -> some View {
+        let selected = filteredContentRows.flatMap(\.flattened).filter { target.contains($0.id) }
+        let selectedFileIDs = selected.reduce(into: Set<Int>()) { $0.formUnion($1.fileIDs) }
+        if selected.count == 1, let row = selected.first, let file = row.file, let torrent = selectedTorrent, isPreviewable(file) {
+            Button("Preview File") { openTorrentFile(file, in: torrent) }
+                .disabled(!torrentFileExists(file, in: torrent))
+        }
+        filePriorityActions(for: selectedFileIDs)
+        if selected.count == 1, let row = selected.first, let file = row.file {
+            Button("Rename…") {
+                showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func patternFormatLabel(_ title: String, mode: String) -> some View {
+        if contentFileFilterMode == mode {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 
@@ -1949,11 +2180,6 @@ struct ContentView: View {
         }
         .width(min: 150, ideal: 260)
         .customizationID("peer.files")
-    }
-
-    private func peerColumnHeader(_ title: String, width: CGFloat) -> some View {
-        Text(LocalizedStringKey(title)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            .frame(width: width, alignment: .leading)
     }
 
     @ViewBuilder
@@ -2088,7 +2314,7 @@ struct ContentView: View {
         pieceAvailability = []
         trackers = []
         files = []
-        selectedFileIDs = []
+        selectedContentNodeIDs = []
         peers = []
         webSeeds = []
         guard let selectedTorrentID, store.isConnected else { return }
@@ -3166,6 +3392,22 @@ struct PendingTorrentFile: Identifiable {
     let sourceURL: URL?
 }
 
+private func filePathMatches(_ path: String, pattern: String, mode: String) -> Bool {
+    switch mode {
+    case "regex":
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+        return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+    case "wildcards":
+        let expression = NSRegularExpression.escapedPattern(for: pattern)
+            .replacingOccurrences(of: "\\*", with: ".*")
+            .replacingOccurrences(of: "\\?", with: ".")
+        guard let regex = try? NSRegularExpression(pattern: expression, options: [.caseInsensitive]) else { return false }
+        return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+    default:
+        return path.localizedCaseInsensitiveContains(pattern)
+    }
+}
+
 private func removeLocalTorrentSource(_ file: PendingTorrentFile) throws {
     guard let url = file.sourceURL else { return }
     let access = url.startAccessingSecurityScopedResource()
@@ -3807,19 +4049,7 @@ struct AddTorrentSheet: View {
     }
 
     private func matchesFileFilter(_ path: String, pattern: String) -> Bool {
-        switch fileFilterMode {
-        case "regex":
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
-            return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
-        case "wildcards":
-            let expression = NSRegularExpression.escapedPattern(for: pattern)
-                .replacingOccurrences(of: "\\*", with: ".*")
-                .replacingOccurrences(of: "\\?", with: ".")
-            guard let regex = try? NSRegularExpression(pattern: expression, options: [.caseInsensitive]) else { return false }
-            return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
-        default:
-            return path.localizedCaseInsensitiveContains(pattern)
-        }
+        filePathMatches(path, pattern: pattern, mode: fileFilterMode)
     }
 
     private func availableDiskSpace(for path: String) -> Int64? {
