@@ -620,6 +620,7 @@ struct ContentView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(-1)
                     if showStatusBar {
                         Divider()
                         statusBar

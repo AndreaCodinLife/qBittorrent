@@ -194,7 +194,7 @@ struct RSSPane: View {
                         selectedArticleIDs = []
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                 .frame(minWidth: 190, idealWidth: 230)
                 VStack(spacing: 0) {
                     if rssProcessingEnabled == false {
@@ -220,7 +220,7 @@ struct RSSPane: View {
                     Divider()
                     if let errorMessage {
                         ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                     } else {
                         TextField("Filter articles…", text: $articleFilter)
                             .textFieldStyle(.roundedBorder)
@@ -288,11 +288,11 @@ struct RSSPane: View {
                                 RSSArticlePreview(article: previewArticle, onOpenURL: openRSSURL)
                                     .frame(minWidth: 280)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                 .frame(minWidth: 350)
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
