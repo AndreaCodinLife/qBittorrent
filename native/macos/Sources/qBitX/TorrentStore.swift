@@ -466,26 +466,31 @@ final class TorrentStore {
     @discardableResult
     func add(file data: Data, filename: String, options: TorrentAddOptions = TorrentAddOptions(), verifyNewTorrent: Bool = false) async throws -> String? {
         guard let api else { throw TorrentStoreError.disconnected }
-        let existingTorrentIDs: Set<String>
-        if verifyNewTorrent { existingTorrentIDs = try await api.torrentIDs() }
-        else { existingTorrentIDs = [] }
+        let existingTorrentIDs = verifyNewTorrent ? try? await api.torrentIDs() : nil
         let addedTorrentID = try await api.add(file: data, filename: filename, options: options)
         guard verifyNewTorrent else {
             await refresh()
             return addedTorrentID
         }
-        guard let addedTorrentID, !existingTorrentIDs.contains(addedTorrentID.lowercased()) else {
+        guard let existingTorrentIDs,
+              let addedTorrentID,
+              !existingTorrentIDs.contains(addedTorrentID.lowercased()) else {
             await refresh()
             return nil
         }
 
         for _ in 0..<10 {
-            try Task.checkCancellation()
-            if try await api.torrentIDs().contains(addedTorrentID.lowercased()) {
-                await refresh()
-                return addedTorrentID
+            guard !Task.isCancelled else { break }
+            do {
+                if try await api.torrentIDs().contains(addedTorrentID.lowercased()) {
+                    await refresh()
+                    return addedTorrentID
+                }
+            } catch {
+                break
             }
-            try await Task.sleep(for: .milliseconds(100))
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { break }
         }
         await refresh()
         return nil
