@@ -13,12 +13,14 @@ let package = Package(
     targets: [
         .target(name: "TorrentSourceFileSupport"),
         .target(name: "TorrentLinkInput"),
+        .target(name: "RSSArticleSupport"),
         .target(name: "QBitXThemeSupport"),
         .target(name: "QBitXWidgetSupport"),
-        .executableTarget(name: "qBitX", dependencies: ["TorrentSourceFileSupport", "TorrentLinkInput", "QBitXThemeSupport", "QBitXWidgetSupport"]),
+        .executableTarget(name: "qBitX", dependencies: ["TorrentSourceFileSupport", "TorrentLinkInput", "RSSArticleSupport", "QBitXThemeSupport", "QBitXWidgetSupport"]),
         .executableTarget(name: "qBitXWidget", dependencies: ["QBitXWidgetSupport"]),
         .testTarget(name: "TorrentSourceFileSupportTests", dependencies: ["TorrentSourceFileSupport"]),
         .testTarget(name: "TorrentLinkInputTests", dependencies: ["TorrentLinkInput"]),
+        .testTarget(name: "RSSArticleSupportTests", dependencies: ["RSSArticleSupport"]),
         .testTarget(name: "QBitXThemeSupportTests", dependencies: ["QBitXThemeSupport"])
     ]
 )

@@ -533,23 +533,43 @@ actor QBittorrentAPI {
             throw APIError.badResponse
         }
         var feeds: [RSSFeed] = []
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        dateFormatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
         func collect(_ node: [String: Any], path: String) {
             for (name, value) in node {
                 guard let entry = value as? [String: Any] else { continue }
-                let itemPath = path.isEmpty ? name : "\(path)/\(name)"
+                let itemPath = path.isEmpty ? name : "\(path)\\\(name)"
                 if let url = entry["url"] as? String {
+                    let rawFeedTitle = (entry["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let feedTitle = rawFeedTitle.isEmpty ? name : rawFeedTitle
+                    let refreshInterval = entry["refreshInterval"] as? Int ?? 0
                     let articles = (entry["articles"] as? [[String: Any]] ?? []).map { article in
-                        RSSArticle(
+                        let date = article["date"] as? String ?? ""
+                        return RSSArticle(
                             id: article["id"] as? String ?? UUID().uuidString,
+                            feedPath: itemPath,
+                            feedTitle: feedTitle,
                             title: article["title"] as? String ?? "Untitled",
+                            author: article["author"] as? String ?? "",
+                            description: article["description"] as? String ?? "",
                             link: article["link"] as? String ?? "",
                             torrentURL: article["torrentURL"] as? String ?? "",
-                            date: article["date"] as? String ?? "",
+                            date: date,
+                            dateValue: dateFormatter.date(from: date),
                             isRead: article["isRead"] as? Bool ?? false
                         )
                     }
-                    let feedTitle = (entry["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    feeds.append(RSSFeed(path: itemPath, title: feedTitle.isEmpty ? name : feedTitle, url: url, articles: articles))
+                    feeds.append(RSSFeed(
+                        path: itemPath,
+                        title: feedTitle,
+                        url: url,
+                        refreshInterval: refreshInterval,
+                        isLoading: entry["isLoading"] as? Bool ?? false,
+                        hasError: entry["hasError"] as? Bool ?? false,
+                        articles: articles
+                    ))
                 } else {
                     collect(entry, path: itemPath)
                 }
@@ -566,7 +586,7 @@ actor QBittorrentAPI {
         func collect(_ node: [String: Any], path: String) {
             for (name, value) in node {
                 guard let entry = value as? [String: Any], entry["url"] == nil else { continue }
-                let itemPath = path.isEmpty ? name : "\(path)/\(name)"
+                let itemPath = path.isEmpty ? name : "\(path)\\\(name)"
                 folders.append(RSSFolder(path: itemPath, title: name))
                 collect(entry, path: itemPath)
             }
@@ -575,8 +595,22 @@ actor QBittorrentAPI {
         return folders.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
     }
 
-    func addRSSFeed(_ url: String, path: String? = nil) async throws {
-        _ = try await request("rss/addFeed", method: "POST", form: ["url": url, "path": path ?? url])
+    func rssProcessingEnabled() async throws -> Bool? {
+        let data = try await request("app/preferences")
+        let preferences = try JSONDecoder().decode(RSSProcessingPreferences.self, from: data)
+        return preferences.rss_processing_enabled
+    }
+
+    func addRSSFeed(_ url: String, path: String? = nil, refreshInterval: Int = 0) async throws {
+        _ = try await request("rss/addFeed", method: "POST", form: [
+            "url": url, "path": path ?? url, "refreshInterval": "\(max(0, refreshInterval))"
+        ])
+    }
+
+    func setRSSFeedRefreshInterval(path: String, seconds: Int) async throws {
+        _ = try await request("rss/setFeedRefreshInterval", method: "POST", form: [
+            "path": path, "refreshInterval": "\(max(0, seconds))"
+        ])
     }
 
     func markRSSArticleRead(path: String, articleID: String) async throws {
@@ -1238,8 +1272,15 @@ struct RSSFeed: Identifiable, Sendable {
     let path: String
     let title: String
     let url: String
+    let refreshInterval: Int
+    let isLoading: Bool
+    let hasError: Bool
     let articles: [RSSArticle]
     var id: String { path }
+}
+
+private struct RSSProcessingPreferences: Decodable {
+    let rss_processing_enabled: Bool?
 }
 
 struct RSSFolder: Identifiable, Sendable {
@@ -1250,11 +1291,18 @@ struct RSSFolder: Identifiable, Sendable {
 
 struct RSSArticle: Identifiable, Sendable {
     let id: String
+    let feedPath: String
+    let feedTitle: String
     let title: String
+    let author: String
+    let description: String
     let link: String
     let torrentURL: String
     let date: String
+    let dateValue: Date?
     let isRead: Bool
+
+    var selectionID: String { "\(feedPath)\u{1F}\(id)" }
 }
 
 private struct AddTorrentResponse: Decodable {

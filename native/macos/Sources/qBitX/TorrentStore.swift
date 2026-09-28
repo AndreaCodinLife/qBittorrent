@@ -1,12 +1,19 @@
 import Foundation
 import Observation
 import QBitXWidgetSupport
+import TorrentLinkInput
 import WidgetKit
 
 enum TorrentStoreError: LocalizedError {
     case disconnected
+    case unsupportedRSSArticleURL
 
-    var errorDescription: String? { "qBitX is not connected to qBittorrent." }
+    var errorDescription: String? {
+        switch self {
+        case .disconnected: "qBitX is not connected to qBittorrent."
+        case .unsupportedRSSArticleURL: "This RSS article does not contain a supported torrent URL."
+        }
+    }
 }
 
 @MainActor
@@ -792,14 +799,31 @@ final class TorrentStore {
         return try await api.rssFolders()
     }
 
-    func addRSSFeed(_ url: String, path: String? = nil) async throws {
+    func rssProcessingEnabled() async throws -> Bool? {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.addRSSFeed(url, path: path)
+        return try await api.rssProcessingEnabled()
+    }
+
+    func addRSSFeed(_ url: String, path: String? = nil, refreshInterval: Int = 0) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.addRSSFeed(url, path: path, refreshInterval: refreshInterval)
+    }
+
+    func setRSSFeedRefreshInterval(path: String, seconds: Int) async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.setRSSFeedRefreshInterval(path: path, seconds: seconds)
     }
 
     func addRSSArticle(_ article: RSSArticle) async throws {
-        let url = article.torrentURL.isEmpty ? article.link : article.torrentURL
-        try await add(url: url)
+        let value = article.torrentURL.isEmpty ? article.link : article.torrentURL
+        let parsed = TorrentLinkInput.parse(value)
+        guard parsed.invalidLines.isEmpty,
+              parsed.urls.count == 1,
+              let url = parsed.urls.first,
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https", "magnet"].contains(scheme)
+        else { throw TorrentStoreError.unsupportedRSSArticleURL }
+        try await add(url: url.absoluteString)
     }
 
     func markRSSArticleRead(path: String, articleID: String) async throws {

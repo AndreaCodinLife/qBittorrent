@@ -579,67 +579,69 @@ struct ContentView: View {
             filterSidebar
                 .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 250)
         } detail: {
-            VStack(spacing: 0) {
-                mainTabs
-                Divider()
-                ZStack {
-                    if store.hasCompletedInitialConnection {
-                        if showSearchTab {
-                            SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(mainTab == .search ? 1 : 0)
-                                .allowsHitTesting(mainTab == .search)
-                                .accessibilityHidden(mainTab != .search)
-                        }
-
-                        if mainTab == .transfers {
-                            if showDetailPane {
-                                VSplitView {
-                                    torrentTable.frame(minHeight: 240)
-                                    detailsPane.frame(minHeight: 170)
-                                }
-                            } else {
-                                torrentTable
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    mainTabs
+                    Divider()
+                    ZStack {
+                        if store.hasCompletedInitialConnection {
+                            if showSearchTab {
+                                SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .opacity(mainTab == .search ? 1 : 0)
+                                    .allowsHitTesting(mainTab == .search)
+                                    .accessibilityHidden(mainTab != .search)
                             }
-                        }
-                        if showRSSTab {
-                            RSSPane(store: store, unreadCount: $rssUnreadCount)
+
+                            if mainTab == .transfers {
+                                if showDetailPane {
+                                    VSplitView {
+                                        torrentTable.frame(minHeight: 240)
+                                        detailsPane.frame(minHeight: 170)
+                                    }
+                                } else {
+                                    torrentTable
+                                }
+                            }
+                            if showRSSTab {
+                                RSSPane(store: store, unreadCount: $rssUnreadCount)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .opacity(mainTab == .rss ? 1 : 0)
+                                    .allowsHitTesting(mainTab == .rss)
+                                    .accessibilityHidden(mainTab != .rss)
+                            }
+                            if mainTab == .executionLog {
+                                ExecutionLogView(store: store, onClose: hideExecutionLogTab)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                        } else if !showSplashOnStartup {
+                            ProgressView("Starting qBittorrent…")
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(mainTab == .rss ? 1 : 0)
-                                .allowsHitTesting(mainTab == .rss)
-                                .accessibilityHidden(mainTab != .rss)
                         }
-                        if mainTab == .executionLog {
-                            ExecutionLogView(store: store, onClose: hideExecutionLogTab)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    } else if !showSplashOnStartup {
-                        ProgressView("Starting qBittorrent…")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if showStatusBar {
+                        Divider()
+                        statusBar
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if showStatusBar {
-                    Divider()
-                    statusBar
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .confirmationDialog("Recursive download confirmation", isPresented: $showsRecursiveTorrentConfirmation, titleVisibility: .visible) {
+                    Button("Add Torrent Files (\(recursiveTorrentCandidates.count))") {
+                        addRecursiveTorrentCandidates()
+                    }
+                    Button("Never") {
+                        recursiveDownloadEnabled = false
+                        discardRecursiveTorrentCandidates()
+                    }
+                    Button("No", role: .cancel) {
+                        discardRecursiveTorrentCandidates()
+                    }
+                } message: {
+                    Text(recursiveTorrentConfirmationMessage)
                 }
+                .background(Color(nsColor: .windowBackgroundColor))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .confirmationDialog("Recursive download confirmation", isPresented: $showsRecursiveTorrentConfirmation, titleVisibility: .visible) {
-                Button("Add Torrent Files (\(recursiveTorrentCandidates.count))") {
-                    addRecursiveTorrentCandidates()
-                }
-                Button("Never") {
-                    recursiveDownloadEnabled = false
-                    discardRecursiveTorrentCandidates()
-                }
-                Button("No", role: .cancel) {
-                    discardRecursiveTorrentCandidates()
-                }
-            } message: {
-                Text(recursiveTorrentConfirmationMessage)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
         .environment(\.locale, store.interfaceLocale.isEmpty ? .current : Locale(identifier: store.interfaceLocale))
