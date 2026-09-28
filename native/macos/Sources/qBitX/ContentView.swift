@@ -117,6 +117,7 @@ struct ContentView: View {
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
+    @AppStorage("qBitX.appearance") private var appearance = "system"
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingDoubleClickAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedDoubleClickAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
@@ -309,6 +310,14 @@ struct ContentView: View {
         torrents.first { $0.id == selectedTorrentID }
     }
 
+    private var appColorSchemePreference: ColorScheme? {
+        switch appearance {
+        case "light": .light
+        case "dark": .dark
+        default: nil
+        }
+    }
+
     private var selectedTorrentID: String? {
         visibleTorrents.first { selectedTorrentIDs.contains($0.id) }?.id ?? selectedTorrentIDs.first
     }
@@ -391,6 +400,7 @@ struct ContentView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .preferredColorScheme(appColorSchemePreference)
         .onOpenURL(perform: handleOpenURL)
         .task(id: retryID) { store.start(retrying: retryID > 0) }
         .task(id: store.isConnected) { if store.isConnected { await loadFilterCatalogs() } }

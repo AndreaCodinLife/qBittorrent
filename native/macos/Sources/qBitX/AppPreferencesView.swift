@@ -22,6 +22,7 @@ enum TorrentDoubleClickAction: String, CaseIterable, Identifiable {
 
 struct AppPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("qBitX.appearance") private var appearance = "system"
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
@@ -54,6 +55,17 @@ struct AppPreferencesView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Appearance") {
+                    Picker("Color scheme", selection: $appearance) {
+                        Text("System").tag("system")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    Text("Liquid Glass and other system materials adapt to the selected appearance.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Transfer List") {
                     Picker("Double-click a downloading torrent", selection: $downloadingAction) {
                         ForEach(TorrentDoubleClickAction.allCases) { action in
