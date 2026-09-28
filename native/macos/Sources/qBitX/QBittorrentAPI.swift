@@ -196,6 +196,10 @@ actor QBittorrentAPI {
         _ = try await request("app/sendTestEmail", method: "POST")
     }
 
+    func refreshIPFilter() async throws {
+        _ = try await request("app/refreshIPFilter", method: "POST")
+    }
+
     func directoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
         let data = try await request("app/getDirectoryContent", query: [
             "dirPath": path,

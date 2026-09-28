@@ -50,6 +50,7 @@ private slots:
     void setPreferencesAction();
     void defaultSavePathAction();
     void sendTestEmailAction();
+    void refreshIPFilterAction();
     void getDirectoryContentAction();
     void getFreeSpaceAtPathAction();
     void cookiesAction();

@@ -426,7 +426,8 @@ struct BackendPreferencesView: View {
     @State private var currentAPIKey = ""
     @State private var apiKeyAction: APIKeyAction?
     @State private var isSendingTestEmail = false
-    @State private var testEmailMessage: String?
+    @State private var isRefreshingIPFilter = false
+    @State private var statusMessage: String?
 
     private let sections = ["Behavior", "Downloads", "Connection", "Speed", "BitTorrent", "Search", "RSS", "WebUI", "Advanced"]
 
@@ -449,8 +450,8 @@ struct BackendPreferencesView: View {
                 if let errorMessage {
                     Text(errorMessage).font(.caption).foregroundStyle(.red).padding(12)
                 }
-                if let testEmailMessage {
-                    Text(testEmailMessage).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12)
+                if let statusMessage {
+                    Text(statusMessage).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12)
                 }
                 List {
                     ForEach($items) { $item in
@@ -559,6 +560,12 @@ struct BackendPreferencesView: View {
                                         .disabled(!canSendTestEmail)
                                         .help(testEmailButtonHelp)
                                 }
+                                if item.id == "ip_filter_path" {
+                                    Button("Refresh Filter") { refreshIPFilter() }
+                                        .buttonStyle(.glass)
+                                        .disabled(!canRefreshIPFilter || item.isDirty)
+                                        .help(ipFilterButtonHelp)
+                                }
                                 if item.isDirty && !item.readOnly {
                                     Button("Save") { save(item) }
                                         .buttonStyle(.glass)
@@ -613,6 +620,27 @@ struct BackendPreferencesView: View {
         return "Ask qBittorrent to send a test email using the saved email settings."
     }
 
+    private var canRefreshIPFilter: Bool {
+        store.isConnected
+            && store.usesBundledBackend
+            && !isRefreshingIPFilter
+            && items.first(where: { $0.id == "ip_filter_enabled" })?.draft == "true"
+            && items.first(where: { $0.id == "ip_filter_path" })?.draft.isEmpty == false
+            && !items.contains(where: { ["ip_filter_enabled", "ip_filter_path"].contains($0.id) && $0.isDirty })
+    }
+
+    private var ipFilterButtonHelp: String {
+        if !store.isConnected { return "Connect to qBittorrent before refreshing the IP filter." }
+        if !store.usesBundledBackend { return "IP-filter refresh is available with the bundled qBittorrent backend." }
+        if items.first(where: { $0.id == "ip_filter_enabled" })?.draft != "true" {
+            return "Enable IP filtering before refreshing the filter."
+        }
+        if items.contains(where: { ["ip_filter_enabled", "ip_filter_path"].contains($0.id) && $0.isDirty }) {
+            return "Save IP-filter settings before refreshing the filter."
+        }
+        return "Reload the saved filter file. Check the Execution Log for the parse result."
+    }
+
     private func reload() async {
         do {
             let data = try await store.preferencesData()
@@ -658,15 +686,30 @@ struct BackendPreferencesView: View {
     private func sendTestEmail() {
         guard canSendTestEmail else { return }
         isSendingTestEmail = true
-        testEmailMessage = nil
+        statusMessage = nil
         Task {
             do {
                 try await store.sendTestEmail()
-                testEmailMessage = "qBittorrent attempted to send a test email. Check your inbox and the Execution Log for the result."
+                statusMessage = "qBittorrent attempted to send a test email. Check your inbox and the Execution Log for the result."
             } catch {
                 errorMessage = error.localizedDescription
             }
             isSendingTestEmail = false
+        }
+    }
+
+    private func refreshIPFilter() {
+        guard canRefreshIPFilter else { return }
+        isRefreshingIPFilter = true
+        statusMessage = nil
+        Task {
+            do {
+                try await store.refreshIPFilter()
+                statusMessage = "qBittorrent requested an IP-filter refresh. Check the Execution Log for the parse result."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isRefreshingIPFilter = false
         }
     }
 

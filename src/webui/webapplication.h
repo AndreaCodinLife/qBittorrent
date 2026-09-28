@@ -155,6 +155,7 @@ private:
         // <<controller name, action name>, HTTP method>
         {{u"app"_s, u"deleteAPIKey"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"rotateAPIKey"_s}, Http::HEADER_REQUEST_METHOD_POST},
+        {{u"app"_s, u"refreshIPFilter"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"sendTestEmail"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"setCookies"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"app"_s, u"setPreferences"_s}, Http::HEADER_REQUEST_METHOD_POST},

@@ -1278,6 +1278,18 @@ void AppController::sendTestEmailAction()
     setResult(QString());
 }
 
+void AppController::refreshIPFilterAction()
+{
+    BitTorrent::Session *const session = BitTorrent::Session::instance();
+    if (!session->isIPFilteringEnabled() || session->IPFilterFile().isEmpty())
+        throw APIError(APIErrorType::BadParams, tr("IP filtering must be enabled and a filter file must be configured"));
+
+    const Path filterFile = session->IPFilterFile();
+    session->setIPFilterFile({});
+    session->setIPFilterFile(filterFile);
+    setResult(QString());
+}
+
 void AppController::getDirectoryContentAction()
 {
     requireParams({u"dirPath"_s});
