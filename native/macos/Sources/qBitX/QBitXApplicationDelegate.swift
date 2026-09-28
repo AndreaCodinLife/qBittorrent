@@ -8,6 +8,7 @@ final class QBitXApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MacOSNotifications.setDelegate(notificationDelegate)
+        Self.store?.start()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

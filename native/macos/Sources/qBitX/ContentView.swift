@@ -349,6 +349,7 @@ struct ContentView: View {
     @State private var inspectedRecursiveTorrentIDs: Set<String> = []
     @State private var actionError: String?
     @State private var retryID = 0
+    @State private var commandActions: QBitXCommandActions?
     @State private var properties: TorrentProperties?
     @State private var pieceStates: [Int] = []
     @State private var pieceAvailability: [Int] = []
@@ -576,24 +577,29 @@ struct ContentView: View {
                 mainTabs
                 Divider()
                 ZStack {
-                    SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(mainTab == .search ? 1 : 0)
-                        .allowsHitTesting(mainTab == .search)
-                        .accessibilityHidden(mainTab != .search)
+                    if store.hasCompletedInitialConnection {
+                        SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .opacity(mainTab == .search ? 1 : 0)
+                            .allowsHitTesting(mainTab == .search)
+                            .accessibilityHidden(mainTab != .search)
 
-                    if mainTab == .transfers {
-                        if showDetailPane {
-                            VSplitView {
-                                torrentTable.frame(minHeight: 240)
-                                detailsPane.frame(minHeight: 170)
+                        if mainTab == .transfers {
+                            if showDetailPane {
+                                VSplitView {
+                                    torrentTable.frame(minHeight: 240)
+                                    detailsPane.frame(minHeight: 170)
+                                }
+                            } else {
+                                torrentTable
                             }
-                        } else {
-                            torrentTable
                         }
-                    }
-                    if mainTab == .rss {
-                        RSSPane(store: store)
+                        if mainTab == .rss {
+                            RSSPane(store: store)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else if !showSplashOnStartup {
+                        ProgressView("Starting qBittorrent…")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -654,6 +660,7 @@ struct ContentView: View {
             if isConnected { presentNextExternalURLIfReady() }
         }
         .onAppear {
+            if commandActions == nil { commandActions = makeCommandActions() }
             loadThemePalette()
             sidebarVisibility = showFiltersSidebar ? .all : .detailOnly
             syncWindowTitle()
@@ -683,37 +690,7 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: store.hasCompletedInitialConnection)
         .toolbar { toolbarContent }
         .toolbarVisibility(showToolbar ? .visible : .hidden, for: .windowToolbar)
-        .focusedSceneValue(\.qBitXCommandActions, QBitXCommandActions(
-            addTorrentFile: { showsFileImporter = true },
-            addTorrentURL: { showsURLSheet = true },
-            pasteTorrentLinks: pasteTorrentLinks,
-            createTorrent: { showsTorrentCreator = true },
-            removeSelected: { requestRemoval(hashes: selectedHashes) },
-            startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
-            stopSelected: { runBulkAction { try await store.command(.stop, hashes: $0) } },
-            forceStartSelected: { runBulkAction { try await store.setForceStart(true, hashes: $0) } },
-            recheckSelected: { requestTorrentRecheck(hashes: selectedHashes) },
-            moveSelectedToTop: { runBulkAction { try await store.command(.topPrio, hashes: $0) } },
-            moveSelectedUp: { runBulkAction { try await store.command(.increasePrio, hashes: $0) } },
-            moveSelectedDown: { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } },
-            moveSelectedToBottom: { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } },
-            pauseSession: { setSessionPaused(true) },
-            resumeSession: { setSessionPaused(false) },
-            toggleSpeedLimitsMode: toggleSpeedLimitsMode,
-            showAppPreferences: { showsAppPreferences = true },
-            showPreferences: { showsBackendPreferences = true },
-            showStatistics: { showsStatistics = true },
-            showSpeedLimits: { showsSpeedLimits = true },
-            focusTorrentFilter: { mainTab = .transfers; torrentFilterFocused = true },
-            selectTransfers: { mainTab = .transfers },
-            selectSearch: { mainTab = .search },
-            selectRSS: { mainTab = .rss },
-            showExecutionLog: { showsExecutionLog = true },
-            openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
-            checkForUpdates: { Task { await programUpdateChecker.check(manual: true) } },
-            donate: { openURL("https://www.qbittorrent.org/donate") },
-            showAbout: { showsAbout = true }
-        ))
+        .focusedSceneValue(\.qBitXCommandActions, commandActions)
         .sheet(isPresented: $showsURLSheet, onDismiss: {
             incomingTorrentURL = nil
             presentNextExternalURLIfReady()
@@ -869,6 +846,40 @@ struct ContentView: View {
         } message: {
             Text(authenticationError ?? "")
         }
+    }
+
+    private func makeCommandActions() -> QBitXCommandActions {
+        QBitXCommandActions(
+            addTorrentFile: { showsFileImporter = true },
+            addTorrentURL: { showsURLSheet = true },
+            pasteTorrentLinks: pasteTorrentLinks,
+            createTorrent: { showsTorrentCreator = true },
+            removeSelected: { requestRemoval(hashes: selectedHashes) },
+            startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
+            stopSelected: { runBulkAction { try await store.command(.stop, hashes: $0) } },
+            forceStartSelected: { runBulkAction { try await store.setForceStart(true, hashes: $0) } },
+            recheckSelected: { requestTorrentRecheck(hashes: selectedHashes) },
+            moveSelectedToTop: { runBulkAction { try await store.command(.topPrio, hashes: $0) } },
+            moveSelectedUp: { runBulkAction { try await store.command(.increasePrio, hashes: $0) } },
+            moveSelectedDown: { runBulkAction { try await store.command(.decreasePrio, hashes: $0) } },
+            moveSelectedToBottom: { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } },
+            pauseSession: { setSessionPaused(true) },
+            resumeSession: { setSessionPaused(false) },
+            toggleSpeedLimitsMode: toggleSpeedLimitsMode,
+            showAppPreferences: { showsAppPreferences = true },
+            showPreferences: { showsBackendPreferences = true },
+            showStatistics: { showsStatistics = true },
+            showSpeedLimits: { showsSpeedLimits = true },
+            focusTorrentFilter: { mainTab = .transfers; torrentFilterFocused = true },
+            selectTransfers: { mainTab = .transfers },
+            selectSearch: { mainTab = .search },
+            selectRSS: { mainTab = .rss },
+            showExecutionLog: { showsExecutionLog = true },
+            openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
+            checkForUpdates: { Task { await programUpdateChecker.check(manual: true) } },
+            donate: { openURL("https://www.qbittorrent.org/donate") },
+            showAbout: { showsAbout = true }
+        )
     }
 
     @ToolbarContentBuilder

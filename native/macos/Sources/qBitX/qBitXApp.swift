@@ -7,6 +7,18 @@ struct QBitXApp: App {
     @State private var programUpdateChecker = ProgramUpdateState()
     @AppStorage("qBitX.showSpeedInMenuBar") private var showSpeedInMenuBar = false
 
+    // AppKit may report the current status item visibility repeatedly. Writing the
+    // same value through AppStorage invalidates the app graph on every report.
+    private var menuBarVisibility: Binding<Bool> {
+        Binding(
+            get: { showSpeedInMenuBar },
+            set: { isVisible in
+                guard showSpeedInMenuBar != isVisible else { return }
+                showSpeedInMenuBar = isVisible
+            }
+        )
+    }
+
     init() {
         let store = TorrentStore()
         _store = State(initialValue: store)
@@ -15,13 +27,31 @@ struct QBitXApp: App {
 
     var body: some Scene {
         WindowGroup("qBitX", id: "main") {
-            ContentView(store: store, programUpdateChecker: programUpdateChecker)
-                .frame(minWidth: 980, minHeight: 620)
+            Group {
+                if store.hasCompletedInitialConnection {
+                    ContentView(store: store, programUpdateChecker: programUpdateChecker)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .frame(width: 64, height: 64)
+                            .accessibilityHidden(true)
+                        ProgressView("Starting qBittorrent…")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                }
+            }
+            .frame(minWidth: 980, minHeight: 620)
         }
-        .commands { QBitXCommands() }
+        .commands {
+            if store.hasCompletedInitialConnection {
+                QBitXCommands()
+            }
+        }
         .defaultSize(width: 1220, height: 760)
 
-        MenuBarExtra(isInserted: $showSpeedInMenuBar) {
+        MenuBarExtra(isInserted: menuBarVisibility) {
             MenuBarSpeedView(store: store)
                 .environment(\.locale, store.interfaceLocale.isEmpty ? .current : Locale(identifier: store.interfaceLocale))
         } label: {

@@ -1,6 +1,8 @@
 import SwiftUI
 
-struct QBitXCommandActions {
+struct QBitXCommandActions: Equatable {
+    private let identity = UUID()
+
     var addTorrentFile: () -> Void
     var addTorrentURL: () -> Void
     var pasteTorrentLinks: () -> Void
@@ -30,6 +32,10 @@ struct QBitXCommandActions {
     var checkForUpdates: () -> Void
     var donate: () -> Void
     var showAbout: () -> Void
+
+    static func == (lhs: QBitXCommandActions, rhs: QBitXCommandActions) -> Bool {
+        lhs.identity == rhs.identity
+    }
 }
 
 private struct QBitXCommandActionsKey: FocusedValueKey {
