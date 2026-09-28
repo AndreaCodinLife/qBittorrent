@@ -185,6 +185,11 @@ struct RSSPane: View {
                         }
                     }
                     .listStyle(.sidebar)
+                    .onKeyPress(KeyEquivalent("\u{F705}")) {
+                        renameSelectedRSSItem()
+                        return .handled
+                    }
+                    .onDeleteCommand { beginRemoving(activeFeedSelection) }
                     .onChange(of: selectedFeedItems) { oldItems, newItems in
                         let inserted = newItems.subtracting(oldItems)
                         if let insertedItem = inserted.first {
@@ -563,6 +568,7 @@ struct RSSPane: View {
         .tag(node.selection)
         .accessibilityLabel("RSS \(itemType), \(node.title), \(node.unreadCount) unread")
         .accessibilityHint("Drag to move this \(itemType) into a folder or the subscriptions root.")
+        .onTapGesture(count: 2) { renameRSSItem(node.selection) }
         .onDrag { rssDragProvider(for: node.selection) }
         .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
             guard let folderPath = node.folderPath else { return false }
@@ -609,6 +615,29 @@ struct RSSPane: View {
         return true
     }
 
+    private func renameSelectedRSSItem() {
+        guard selectedFeedItems.count == 1, let selection = selectedFeedItems.first else { return }
+        renameRSSItem(selection)
+    }
+
+    private func renameRSSItem(_ selection: RSSPaneSelection) {
+        selectedFeedItems = [selection]
+        activeFeedSelection = selection
+        switch selection {
+        case let .folder(path):
+            editingFolderPath = path
+            folderName = path.components(separatedBy: "\\").last ?? path
+            showsRenameFolder = true
+        case let .feed(path):
+            guard let feed = feeds.first(where: { $0.path == path }) else { return }
+            editingFeedPath = feed.path
+            newFeedPath = feed.path
+            showsMoveFeed = true
+        case .allArticles, .unreadArticles:
+            return
+        }
+    }
+
     private func moveRSSItems(_ paths: [String], into destinationFolder: String) async {
         guard destinationFolder.isEmpty || folders.contains(where: { $0.path == destinationFolder }) else { return }
         let folderPaths = Set(folders.map(\.path))
@@ -653,11 +682,7 @@ struct RSSPane: View {
             Button("Add Feed to Folder…") { prepareAddFeed(in: path) }
             if rssSelectionsForAction(.folder(path)).count == 1 {
                 Button("Add Subfolder…") { prepareAddFolder(in: path) }
-                Button("Rename Folder…") {
-                    editingFolderPath = path
-                    folderName = path.components(separatedBy: "\\").last ?? path
-                    showsRenameFolder = true
-                }
+                Button("Rename Folder…") { renameRSSItem(.folder(path)) }
             }
             Button("Remove Selected Items", role: .destructive) { beginRemoving(.folder(path)) }
         case let .feed(path):
@@ -672,11 +697,7 @@ struct RSSPane: View {
                         editedFeedRefreshInterval = "\(feed.refreshInterval)"
                         showsEditFeed = true
                     }
-                    Button("Rename or Move…") {
-                        editingFeedPath = feed.path
-                        newFeedPath = feed.path
-                        showsMoveFeed = true
-                    }
+                    Button("Rename or Move…") { renameRSSItem(.feed(path)) }
                     Button("Copy Selected Feed URLs") {
                         let urls = rssFeedURLsForAction(.feed(path))
                         NSPasteboard.general.setString(urls.joined(separator: "\n"), forType: .string)
