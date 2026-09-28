@@ -20,7 +20,19 @@ struct RSSArticleMarkupTests {
         #expect(!sanitized.localizedCaseInsensitiveContains("tracker.example"))
         #expect(!sanitized.localizedCaseInsensitiveContains("onclick"))
         #expect(!sanitized.localizedCaseInsensitiveContains("onerror"))
-        #expect(!sanitized.localizedCaseInsensitiveContains("style="))
+        #expect(sanitized.contains(#"style="color: red""#))
+    }
+
+    @Test func keepsSafeInlineStylesAndStripsResourceAndLayoutCSS() {
+        let html = #"<p style="color:#123456; font-size:18px; background-image:url(https://tracker.example/pixel); position:fixed">Styled</p>"#
+
+        let sanitized = RSSArticleMarkup.sanitizedHTMLBody(html, baseURL: "https://feed.example/")
+
+        #expect(sanitized.contains(#"color: #123456"#))
+        #expect(sanitized.contains(#"font-size: 18px"#))
+        #expect(!sanitized.contains("background-image"))
+        #expect(!sanitized.contains("tracker.example"))
+        #expect(!sanitized.contains("position"))
     }
 
     @Test func resolvesRelativeImageURLsAndRejectsNonHTTPImages() {

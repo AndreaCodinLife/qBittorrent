@@ -25,8 +25,9 @@ public enum RSSArticleMarkup {
             html = replacing(#"(?is)<\s*\#(tag)\b[^>]*/?>"#, in: html, with: "")
         }
         html = replacing(#"(?is)<\s*(link|meta|base)\b[^>]*>"#, in: html, with: "")
+        html = sanitizingInlineStyles(in: html)
         html = replacing(
-            #"(?is)\s+(on[a-z0-9_-]*|style|src|srcset|poster|background|data|action|formaction)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
+            #"(?is)\s+(on[a-z0-9_-]*|src|srcset|poster|background|data|action|formaction)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
             in: html,
             with: ""
         )
@@ -107,9 +108,82 @@ public enum RSSArticleMarkup {
             let escapedHref = resolved.absoluteString
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "\"", with: "&quot;")
-            result.replaceSubrange(matchRange, with: "<a href=\"\(escapedHref)\">")
+            let style = safeStyleAttribute(in: openTag).map { " \($0)" } ?? ""
+            result.replaceSubrange(matchRange, with: "<a href=\"\(escapedHref)\"\(style)>")
         }
         return result
+    }
+
+    private static func sanitizingInlineStyles(in html: String) -> String {
+        guard let tagExpression = try? NSRegularExpression(pattern: #"(?is)<[^>]+>"#),
+              let styleExpression = try? NSRegularExpression(pattern: #"(?is)\s+style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#)
+        else { return html }
+        let tags = tagExpression.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        var result = html
+        for tagMatch in tags.reversed() {
+            guard let tagRange = Range(tagMatch.range, in: result) else { continue }
+            var tag = String(result[tagRange])
+            guard let styleMatch = styleExpression.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+                  let attributeRange = Range(styleMatch.range, in: tag),
+                  let valueRange = Range(styleMatch.range(at: 1), in: tag)
+            else { continue }
+            let rawValue = String(tag[valueRange])
+            let value = rawValue.count >= 2 ? String(rawValue.dropFirst().dropLast()) : rawValue
+            let safeDeclarations = value.split(separator: ";").compactMap { declaration -> String? in
+                guard let colon = declaration.firstIndex(of: ":") else { return nil }
+                let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let cssValue = declaration[declaration.index(after: colon)...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isSafeCSSValue(cssValue, for: property) else { return nil }
+                return "\(property): \(cssValue)"
+            }
+            let replacement = safeDeclarations.isEmpty ? "" : " style=\"\(safeDeclarations.joined(separator: "; "))\""
+            tag.replaceSubrange(attributeRange, with: replacement)
+            result.replaceSubrange(tagRange, with: tag)
+        }
+        return result
+    }
+
+    private static func safeStyleAttribute(in tag: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: #"(?is)\s+style\s*=\s*"([^"]*)""#),
+              let match = expression.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+              let valueRange = Range(match.range(at: 1), in: tag)
+        else { return nil }
+        let value = String(tag[valueRange])
+        let declarations = value.split(separator: ";").compactMap { declaration -> String? in
+            guard let colon = declaration.firstIndex(of: ":") else { return nil }
+            let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let cssValue = declaration[declaration.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isSafeCSSValue(cssValue, for: property) else { return nil }
+            return "\(property): \(cssValue)"
+        }
+        return declarations.isEmpty ? nil : "style=\"\(declarations.joined(separator: "; "))\""
+    }
+
+    private static func isSafeCSSValue(_ value: String, for property: String) -> Bool {
+        let normalized = value.lowercased()
+        switch property {
+        case "color", "background-color":
+            return normalized.range(of: #"^(?:[a-z]{1,20}|#[0-9a-f]{3,8}|rgba?\(\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)|transparent)$"#, options: .regularExpression) != nil
+        case "font-size", "line-height", "text-indent", "letter-spacing":
+            return normalized.range(of: #"^(?:[0-9]{1,2}(?:\.\d+)?)(?:px|pt|em|rem|%)?$|^(?:xx-small|x-small|small|medium|large|x-large|xx-large|smaller|larger)$"#, options: .regularExpression) != nil
+        case "font-weight":
+            return ["normal", "bold", "bolder", "lighter", "100", "200", "300", "400", "500", "600", "700", "800", "900"].contains(normalized)
+        case "font-style":
+            return ["normal", "italic", "oblique"].contains(normalized)
+        case "text-decoration":
+            return ["none", "underline", "overline", "line-through"].contains(normalized)
+        case "text-align":
+            return ["left", "right", "center", "justify", "start", "end"].contains(normalized)
+        case "white-space":
+            return ["normal", "pre", "pre-wrap", "pre-line", "nowrap"].contains(normalized)
+        case "vertical-align":
+            return ["baseline", "sub", "super", "text-top", "text-bottom", "middle", "top", "bottom"].contains(normalized)
+        case "font-family":
+            return value.count <= 120 && value.range(of: #"^[A-Za-z0-9 ,_'\-]+$"#, options: .regularExpression) != nil
+        default:
+            return false
+        }
     }
 
     private static func isAllowedLink(_ url: URL) -> Bool {
