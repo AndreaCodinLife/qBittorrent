@@ -590,6 +590,14 @@ struct ContentView: View {
             selectedTrackerRowIDs = []
             await loadDetails()
         }
+        .task(id: "\(selectedTorrentID ?? "")|\(detailTab.rawValue)|\(store.isConnected)|\(mainTab.rawValue)|\(showDetailPane)") {
+            guard selectedTorrentID != nil, mainTab == .transfers, showDetailPane, store.isConnected else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) }
+                catch { return }
+                await refreshDetails(reportErrors: false)
+            }
+        }
         .onChange(of: torrents.map(\.id)) { _, ids in
             selectedTorrentIDs.formIntersection(ids)
             if selectedTorrentIDs.isEmpty, let first = ids.first { selectedTorrentIDs = [first] }
@@ -2487,30 +2495,47 @@ struct ContentView: View {
         selectedContentNodeIDs = []
         peers = []
         webSeeds = []
-        guard let selectedTorrentID, store.isConnected else { return }
+        await refreshDetails()
+    }
+
+    private func refreshDetails(reportErrors: Bool = true) async {
+        guard let torrentID = selectedTorrentID, store.isConnected else { return }
+        let requestedTab = detailTab
         do {
-            switch detailTab {
+            switch requestedTab {
             case .general:
-                async let propertyRequest = store.properties(for: selectedTorrentID)
-                async let statesRequest = try? store.pieceStates(for: selectedTorrentID)
-                async let availabilityRequest = try? store.pieceAvailability(for: selectedTorrentID)
-                properties = try await propertyRequest
-                pieceStates = (await statesRequest) ?? []
-                pieceAvailability = (await availabilityRequest) ?? []
-            case .trackers: trackers = try await store.trackers(for: selectedTorrentID)
-            case .content: files = try await store.files(for: selectedTorrentID)
+                async let propertyRequest = store.properties(for: torrentID)
+                async let statesRequest = try? store.pieceStates(for: torrentID)
+                async let availabilityRequest = try? store.pieceAvailability(for: torrentID)
+                let nextProperties = try await propertyRequest
+                let nextPieceStates = (await statesRequest) ?? []
+                let nextPieceAvailability = (await availabilityRequest) ?? []
+                guard selectedTorrentID == torrentID, detailTab == requestedTab, store.isConnected else { return }
+                properties = nextProperties
+                pieceStates = nextPieceStates
+                pieceAvailability = nextPieceAvailability
+            case .trackers:
+                let nextTrackers = try await store.trackers(for: torrentID)
+                guard selectedTorrentID == torrentID, detailTab == requestedTab, store.isConnected else { return }
+                trackers = nextTrackers
+            case .content:
+                let nextFiles = try await store.files(for: torrentID)
+                guard selectedTorrentID == torrentID, detailTab == requestedTab, store.isConnected else { return }
+                files = nextFiles
             case .peers:
-                while !Task.isCancelled {
-                    peers = try await store.peers(for: selectedTorrentID)
-                    try await Task.sleep(for: .seconds(2))
-                }
-            case .httpSources: webSeeds = try await store.webSeeds(for: selectedTorrentID)
+                let nextPeers = try await store.peers(for: torrentID)
+                guard selectedTorrentID == torrentID, detailTab == requestedTab, store.isConnected else { return }
+                peers = nextPeers
+            case .httpSources:
+                let nextWebSeeds = try await store.webSeeds(for: torrentID)
+                guard selectedTorrentID == torrentID, detailTab == requestedTab, store.isConnected else { return }
+                webSeeds = nextWebSeeds
             default: break
             }
         } catch is CancellationError {
             return
         } catch {
-            actionError = error.localizedDescription
+            if reportErrors { actionError = error.localizedDescription }
         }
     }
 
