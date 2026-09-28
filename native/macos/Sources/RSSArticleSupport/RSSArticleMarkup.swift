@@ -11,6 +11,8 @@ public struct RSSArticlePreviewContent: Sendable {
 }
 
 public enum RSSArticleMarkup {
+    private static let maximumImageCount = 8
+
     public static func sanitizedHTMLBody(_ source: String, baseURL: String) -> String {
         previewContent(source, baseURL: baseURL).htmlBody
     }
@@ -38,9 +40,13 @@ public enum RSSArticleMarkup {
         guard let expression = try? NSRegularExpression(pattern: #"(?is)<\s*img\b[^>]*>"#) else { return html }
         let matches = expression.matches(in: html, range: NSRange(html.startIndex..., in: html))
         var result = html
-        for match in matches.reversed() {
+        for (imageOrdinal, match) in matches.enumerated().reversed() {
             guard let matchRange = Range(match.range, in: result) else { continue }
             let tag = String(result[matchRange])
+            guard imageOrdinal < maximumImageCount else {
+                result.replaceSubrange(matchRange, with: "")
+                continue
+            }
             let srcPattern = #"(?is)\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#
             guard let srcExpression = try? NSRegularExpression(pattern: srcPattern),
                   let srcMatch = srcExpression.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag))

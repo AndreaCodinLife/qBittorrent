@@ -23,6 +23,22 @@ struct RSSArticleMarkupTests {
         #expect(sanitized.contains(#"style="color: red""#))
     }
 
+    @Test func stripsExternalPageResourcesBeforeWebViewRendering() {
+        let html = #"<link rel="stylesheet" href="https://tracker.example/page.css"><meta http-equiv="refresh" content="0;url=https://tracker.example/redirect"><form action="https://tracker.example/post"><input name="q"></form><iframe src="https://tracker.example/frame">frame</iframe><script>fetch("https://tracker.example/script")</script><div style="background-image:url(https://tracker.example/image);color:#123456">Visible</div>"#
+
+        let sanitized = RSSArticleMarkup.sanitizedHTMLBody(html, baseURL: "https://feed.example/")
+
+        #expect(sanitized.contains("Visible"))
+        #expect(sanitized.contains("color: #123456"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("tracker.example"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("stylesheet"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("refresh"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("<form"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("<iframe"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("<script"))
+        #expect(!sanitized.localizedCaseInsensitiveContains("background-image"))
+    }
+
     @Test func keepsSafeInlineStylesAndStripsResourceAndLayoutCSS() {
         let html = #"<p style="color:#123456; font-size:18px; margin:8px 12px; padding-left:4px; border:1px solid #abc; text-transform:uppercase; float:left; word-spacing:2px; font-kerning:none; font-variant:small-caps; background-image:url(https://tracker.example/pixel); position:fixed; width:9001px; padding-top:-2px">Styled</p>"#
 
@@ -89,6 +105,18 @@ struct RSSArticleMarkupTests {
 
         #expect(content.imageURLs == [URL(string: "https://cdn.example/cover.png")!])
         #expect(content.htmlBody.contains("[QBITX_RSS_IMAGE_0]"))
+    }
+
+    @Test func limitsArticleImagesToTheFirstEight() {
+        let tags = (1...10).map { #"<img src="https://cdn.example/\#($0).jpg">"# }.joined()
+
+        let content = RSSArticleMarkup.previewContent(tags, baseURL: "https://feed.example/")
+
+        #expect(content.imageURLs.count == 8)
+        #expect(content.imageURLs.contains(URL(string: "https://cdn.example/1.jpg")!))
+        #expect(content.imageURLs.contains(URL(string: "https://cdn.example/8.jpg")!))
+        #expect(!content.imageURLs.contains(URL(string: "https://cdn.example/9.jpg")!))
+        #expect(!content.imageURLs.contains(URL(string: "https://cdn.example/10.jpg")!))
     }
 
     @Test func convertsSafeBBCodeLinksColorsAndSizes() {
