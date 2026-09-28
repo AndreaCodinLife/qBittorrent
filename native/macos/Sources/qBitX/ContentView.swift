@@ -3,6 +3,7 @@ import QBitXThemeSupport
 import Charts
 import UniformTypeIdentifiers
 import TorrentSourceFileSupport
+import TorrentLinkInput
 import LocalAuthentication
 import Darwin
 
@@ -312,6 +313,7 @@ struct ContentView: View {
     @State private var detailTab: DetailTab = .general
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     @State private var showsURLSheet = false
+    @State private var showsTorrentLinksSheet = false
     @State private var incomingTorrentURL: String?
     @State private var pendingExternalURLs: [URL] = []
     @State private var pendingExternalFiles: [PendingTorrentFile] = []
@@ -704,6 +706,13 @@ struct ContentView: View {
         .toolbar { toolbarContent }
         .toolbarVisibility(showToolbar ? .visible : .hidden, for: .windowToolbar)
         .focusedSceneValue(\.qBitXCommandActions, commandActions)
+        .sheet(isPresented: $showsTorrentLinksSheet, onDismiss: presentNextExternalURLIfReady) {
+            AddTorrentLinksSheet(
+                initialText: TorrentLinkInput.recognizedLines(NSPasteboard.general.string(forType: .string) ?? "")
+            ) { urls in
+                pendingExternalURLs.append(contentsOf: urls)
+            }
+        }
         .sheet(isPresented: $showsURLSheet, onDismiss: {
             incomingTorrentURL = nil
             presentNextExternalURLIfReady()
@@ -863,7 +872,7 @@ struct ContentView: View {
     private func makeCommandActions() -> QBitXCommandActions {
         QBitXCommandActions(
             addTorrentFile: { showsFileImporter = true },
-            addTorrentURL: { showsURLSheet = true },
+            addTorrentURL: { showsTorrentLinksSheet = true },
             pasteTorrentLinks: pasteTorrentLinks,
             createTorrent: { showsTorrentCreator = true },
             removeSelected: { requestRemoval(hashes: selectedHashes) },
@@ -902,10 +911,10 @@ struct ContentView: View {
                 }
                 .help("Open a .torrent file")
 
-                Button { showsURLSheet = true } label: {
+                Button { showsTorrentLinksSheet = true } label: {
                     toolbarLabel("Add URL", image: "link.badge.plus")
                 }
-                .help("Add a magnet link or torrent URL")
+                .help("Add one or more torrent links")
 
                 Button(role: .destructive) { requestRemoval(hashes: selectedHashes) } label: {
                     toolbarLabel("Remove", image: "trash")
@@ -1067,7 +1076,7 @@ struct ContentView: View {
     }
 
     private func presentNextExternalURLIfReady() {
-        guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet, !isAddingExternalTorrent else { return }
+        guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet, !showsTorrentLinksSheet, !isAddingExternalTorrent else { return }
         if !pendingExternalFiles.isEmpty {
             let file = pendingExternalFiles.removeFirst()
             if showTorrentAdditionDialog {

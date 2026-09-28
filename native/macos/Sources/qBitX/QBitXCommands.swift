@@ -56,7 +56,7 @@ struct QBitXCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("Add Torrent File…", action: action(\.addTorrentFile))
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Add Magnet Link or URL…", action: action(\.addTorrentURL))
+            Button("Add Torrent Links…", action: action(\.addTorrentURL))
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Create Torrent…", action: action(\.createTorrent))
                 .keyboardShortcut("n", modifiers: .command)
