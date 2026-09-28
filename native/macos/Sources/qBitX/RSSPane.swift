@@ -297,6 +297,7 @@ struct RSSPane: View {
                 .frame(minWidth: 350)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .layoutPriority(1)
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .task(id: store.isConnected) {
