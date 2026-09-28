@@ -29,6 +29,8 @@
 
 #include "torrentcreationmanager.h"
 
+#include <algorithm>
+#include <exception>
 #include <utility>
 
 #include <boost/multi_index_container.hpp>
@@ -37,6 +39,9 @@
 #include <boost/multi_index/ordered_index.hpp>
 
 #include <QUuid>
+#include <QMetaObject>
+#include <QPointer>
+#include <QRunnable>
 
 #define SETTINGS_KEY(name) u"TorrentCreator/Manager/" name
 
@@ -62,6 +67,8 @@ BitTorrent::TorrentCreationManager::TorrentCreationManager(IApplication *app, QO
     , m_threadPool(this)
 {
     m_threadPool.setObjectName("TorrentCreationManager m_threadPool");
+    m_pieceCountThreadPool.setObjectName("TorrentCreationManager m_pieceCountThreadPool");
+    m_pieceCountThreadPool.setMaxThreadCount(2);
 
     if (m_numThreads > 0)
         m_threadPool.setMaxThreadCount(m_numThreads);
@@ -69,7 +76,7 @@ BitTorrent::TorrentCreationManager::TorrentCreationManager(IApplication *app, QO
 
 BitTorrent::TorrentCreationManager::~TorrentCreationManager() = default;
 
-std::shared_ptr<BitTorrent::TorrentCreationTask> BitTorrent::TorrentCreationManager::createTask(const TorrentCreatorParams &params, const bool startSeeding)
+std::shared_ptr<BitTorrent::TorrentCreationTask> BitTorrent::TorrentCreationManager::createTask(const TorrentCreatorParams &params, const bool startSeeding, const bool ignoreShareLimits)
 {
     if (std::cmp_greater_equal(m_tasks->size(), m_maxTasks.get()))
     {
@@ -87,7 +94,7 @@ std::shared_ptr<BitTorrent::TorrentCreationTask> BitTorrent::TorrentCreationMana
     const QString taskID = generateTaskID();
 
     auto *torrentCreator = new TorrentCreator(params, this);
-    auto creationTask = std::make_shared<TorrentCreationTask>(app(), taskID, torrentCreator, startSeeding);
+    auto creationTask = std::make_shared<TorrentCreationTask>(app(), taskID, torrentCreator, startSeeding, ignoreShareLimits);
     connect(creationTask.get(), &QObject::destroyed, torrentCreator, &BitTorrent::TorrentCreator::requestInterruption);
 
     m_tasks->get<ByID>().insert(creationTask);
@@ -131,4 +138,81 @@ bool BitTorrent::TorrentCreationManager::deleteTask(const QString &id)
 
     tasksByID.erase(iter);
     return true;
+}
+
+QString BitTorrent::TorrentCreationManager::calculatePieces(const TorrentCreatorParams &params)
+{
+    int runningTasks = 0;
+    for (const TorrentPieceCountStatus &status : m_pieceCountTasks)
+    {
+        if (status.state == TorrentPieceCountStatus::State::Running)
+            ++runningTasks;
+    }
+    if (runningTasks >= 4)
+        return {};
+
+    constexpr qsizetype MAX_RETAINED_TASKS = 128;
+    while (std::cmp_greater_equal(m_pieceCountTasks.size(), MAX_RETAINED_TASKS))
+    {
+        const auto finishedTask = std::find_if(m_pieceCountTasks.begin(), m_pieceCountTasks.end(), [](const auto &entry)
+        {
+            return (entry.state != TorrentPieceCountStatus::State::Running);
+        });
+        if (finishedTask == m_pieceCountTasks.end())
+            return {};
+        m_pieceCountTasks.erase(finishedTask);
+    }
+
+    const QString id = u"pieces-"_s + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_pieceCountTasks.insert(id, {});
+
+    const QPointer<TorrentCreationManager> manager {this};
+    m_pieceCountThreadPool.start(QRunnable::create([manager, id, params]
+    {
+        TorrentPieceCountStatus status;
+        try
+        {
+#ifdef QBT_USES_LIBTORRENT2
+            status.pieces = TorrentCreator::calculateTotalPieces(params.sourcePath, params.pieceSize, params.ignoreDotfiles, params.torrentFormat);
+#else
+            status.pieces = TorrentCreator::calculateTotalPieces(params.sourcePath, params.pieceSize, params.ignoreDotfiles, params.isAlignmentOptimized, params.paddedFileSizeLimit);
+#endif
+            status.state = TorrentPieceCountStatus::State::Finished;
+        }
+        catch (const std::exception &error)
+        {
+            status.state = TorrentPieceCountStatus::State::Failed;
+            status.errorMessage = QString::fromUtf8(error.what());
+        }
+        catch (...)
+        {
+            status.state = TorrentPieceCountStatus::State::Failed;
+            status.errorMessage = QObject::tr("Could not calculate the number of pieces.");
+        }
+
+        if (!manager)
+            return;
+        QMetaObject::invokeMethod(manager.data(), [manager, id, status]
+        {
+            if (manager)
+                manager->finishPieceCount(id, status);
+        }, Qt::QueuedConnection);
+    }));
+
+    return id;
+}
+
+std::optional<BitTorrent::TorrentPieceCountStatus> BitTorrent::TorrentCreationManager::pieceCountStatus(const QString &id) const
+{
+    const auto iter = m_pieceCountTasks.constFind(id);
+    if (iter == m_pieceCountTasks.cend())
+        return std::nullopt;
+    return iter.value();
+}
+
+void BitTorrent::TorrentCreationManager::finishPieceCount(const QString &id, const TorrentPieceCountStatus &status)
+{
+    const auto iter = m_pieceCountTasks.find(id);
+    if (iter != m_pieceCountTasks.end())
+        iter.value() = status;
 }

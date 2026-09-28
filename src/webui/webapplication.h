@@ -187,6 +187,7 @@ private:
         {{u"search"_s, u"uninstallPlugin"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"search"_s, u"updatePlugins"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"torrentcreator"_s, u"addTask"_s}, Http::HEADER_REQUEST_METHOD_POST},
+        {{u"torrentcreator"_s, u"calculatePieces"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"torrentcreator"_s, u"deleteTask"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"torrents"_s, u"add"_s}, Http::HEADER_REQUEST_METHOD_POST},
         {{u"torrents"_s, u"addPeers"_s}, Http::HEADER_REQUEST_METHOD_POST},

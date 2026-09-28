@@ -254,7 +254,16 @@ actor QBittorrentAPI {
         if case .apiKey = authentication { authentication = .anonymous }
     }
 
-    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
+    func torrentCreatorCapabilities() async -> TorrentCreatorCapabilities? {
+        do {
+            let data = try await request("torrentcreator/capabilities")
+            return try JSONDecoder().decode(TorrentCreatorCapabilities.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, ignoreShareLimits: Bool, pieceSize: Int, format: String) async throws -> String {
         let trackerList = trackers.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let seedList = webSeeds.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "|"))
@@ -270,10 +279,26 @@ actor QBittorrentAPI {
             "pieceSize": "\(pieceSize)",
             "ignoreDotfiles": ignoreDotfiles ? "true" : "false",
             "private": isPrivate ? "true" : "false",
+            "ignoreShareLimits": ignoreShareLimits ? "true" : "false",
             "format": format,
             "startSeeding": startSeeding ? "true" : "false"
         ])
         return try JSONDecoder().decode(TorrentCreationResponse.self, from: data).taskID
+    }
+
+    func calculateTorrentPieces(sourcePath: String, pieceSize: Int, ignoreDotfiles: Bool, format: String) async throws -> String {
+        let data = try await request("torrentcreator/calculatePieces", method: "POST", form: [
+            "sourcePath": sourcePath,
+            "pieceSize": "\(pieceSize)",
+            "ignoreDotfiles": ignoreDotfiles ? "true" : "false",
+            "format": format
+        ])
+        return try JSONDecoder().decode(TorrentCreationResponse.self, from: data).taskID
+    }
+
+    func torrentPieceCount(taskID: String) async throws -> TorrentPieceCountStatus {
+        let data = try await request("torrentcreator/pieceCount", query: ["taskID": taskID])
+        return try JSONDecoder().decode(TorrentPieceCountStatus.self, from: data)
     }
 
     func torrentCreationStatus(taskID: String) async throws -> TorrentCreationStatus {
@@ -1359,6 +1384,18 @@ struct TorrentMetadataFile: Decodable, Identifiable, Sendable {
 }
 
 private struct TorrentCreationResponse: Decodable { let taskID: String }
+
+struct TorrentCreatorCapabilities: Decodable, Sendable {
+    let calculatePieces: Bool
+    let ignoreShareLimits: Bool
+}
+
+struct TorrentPieceCountStatus: Decodable, Sendable {
+    let taskID: String
+    let status: String
+    let pieces: Int?
+    let errorMessage: String?
+}
 
 struct TorrentCreationStatus: Decodable, Identifiable, Sendable {
     let taskID: String

@@ -4,17 +4,22 @@ import SwiftUI
 struct TorrentCreatorView: View {
     @Environment(\.dismiss) private var dismiss
     let store: TorrentStore
-    @State private var sourcePath = ""
-    @State private var outputPath = ""
-    @State private var trackers = ""
-    @State private var webSeeds = ""
-    @State private var comment = ""
-    @State private var source = ""
-    @State private var isPrivate = false
-    @State private var ignoreDotfiles = true
-    @State private var startSeeding = true
-    @State private var pieceSize = 0
-    @State private var format = "hybrid"
+    @AppStorage("qBitX.torrentCreator.sourcePath") private var sourcePath = ""
+    @AppStorage("qBitX.torrentCreator.outputPath") private var outputPath = ""
+    @AppStorage("qBitX.torrentCreator.trackers") private var trackers = ""
+    @AppStorage("qBitX.torrentCreator.webSeeds") private var webSeeds = ""
+    @AppStorage("qBitX.torrentCreator.comment") private var comment = ""
+    @AppStorage("qBitX.torrentCreator.source") private var source = ""
+    @AppStorage("qBitX.torrentCreator.isPrivate") private var isPrivate = false
+    @AppStorage("qBitX.torrentCreator.ignoreDotfiles") private var ignoreDotfiles = true
+    @AppStorage("qBitX.torrentCreator.startSeeding") private var startSeeding = true
+    @AppStorage("qBitX.torrentCreator.ignoreShareLimits") private var ignoreShareLimits = false
+    @AppStorage("qBitX.torrentCreator.pieceSize") private var pieceSize = 0
+    @AppStorage("qBitX.torrentCreator.format") private var format = "hybrid"
+    @State private var calculatedPieceCount: Int?
+    @State private var isCalculatingPieces = false
+    @State private var pieceCalculationError: String?
+    @State private var pieceCalculationTask: Task<Void, Never>?
     @State private var taskStatus = ""
     @State private var tasks: [TorrentCreationStatus] = []
     @State private var progress = 0.0
@@ -54,15 +59,21 @@ struct TorrentCreatorView: View {
         .frame(width: 800, height: 690)
         .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: sourcePath) { _, newPath in
-            guard outputPath.isEmpty, !newPath.isEmpty else { return }
-            outputPath = defaultOutputPath(for: newPath)
+            invalidatePieceCount()
+            if outputPath.isEmpty, !newPath.isEmpty {
+                outputPath = defaultOutputPath(for: newPath)
+            }
         }
+        .onChange(of: pieceSize) { _, _ in invalidatePieceCount() }
+        .onChange(of: format) { _, _ in invalidatePieceCount() }
+        .onChange(of: ignoreDotfiles) { _, _ in invalidatePieceCount() }
         .task {
             while !Task.isCancelled {
                 await loadTasks()
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+        .onDisappear { pieceCalculationTask?.cancel() }
     }
 
     private var header: some View {
@@ -120,10 +131,52 @@ struct TorrentCreatorView: View {
                         Text(size == 0 ? "Auto" : ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .binary)).tag(size)
                     }
                 }
+                HStack(spacing: 10) {
+                    Button {
+                        calculatePieceCount()
+                    } label: {
+                        Label("Calculate Pieces", systemImage: "number")
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking || isCalculatingPieces || !store.supportsTorrentCreatorExtensions)
+                    .help(store.supportsTorrentCreatorExtensions
+                        ? "Calculate the exact piece count with the connected server."
+                        : "This server does not support qBitX's piece-count extension.")
+
+                    if isCalculatingPieces {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Calculating…")
+                            .foregroundStyle(.secondary)
+                    } else if let calculatedPieceCount {
+                        Text("\(calculatedPieceCount) pieces")
+                            .font(.callout.monospacedDigit())
+                    } else if let pieceCalculationError {
+                        Text(pieceCalculationError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    } else if !store.supportsTorrentCreatorExtensions {
+                        Text("Piece counting requires the qBitX server extension.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
                 Divider()
                 Toggle("Ignore dotfiles", isOn: $ignoreDotfiles)
                 Toggle("Private torrent", isOn: $isPrivate)
                 Toggle("Start seeding immediately", isOn: $startSeeding)
+                Toggle(
+                    store.supportsTorrentCreatorExtensions
+                        ? "Ignore share limits for this torrent"
+                        : "Ignore share limits (server extension required)",
+                    isOn: Binding(
+                        get: { store.supportsTorrentCreatorExtensions && ignoreShareLimits },
+                        set: { ignoreShareLimits = $0 }
+                    )
+                )
+                .disabled(!startSeeding || !store.supportsTorrentCreatorExtensions)
             }
             .controlSize(.regular)
         }
@@ -354,7 +407,7 @@ struct TorrentCreatorView: View {
         taskStatus = "Queued"
         Task {
             do {
-                let id = try await store.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, pieceSize: pieceSize, format: format)
+                let id = try await store.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, ignoreShareLimits: ignoreShareLimits && store.supportsTorrentCreatorExtensions, pieceSize: pieceSize, format: format)
                 for _ in 0..<600 {
                     let result = try await store.torrentCreationStatus(taskID: id)
                     taskStatus = result.status
@@ -372,6 +425,51 @@ struct TorrentCreatorView: View {
             } catch { errorMessage = error.localizedDescription }
             isWorking = false
         }
+    }
+
+    private func calculatePieceCount() {
+        pieceCalculationTask?.cancel()
+        isCalculatingPieces = true
+        calculatedPieceCount = nil
+        pieceCalculationError = nil
+        pieceCalculationTask = Task {
+            do {
+                let taskID = try await store.calculateTorrentPieces(
+                    sourcePath: sourcePath,
+                    pieceSize: pieceSize,
+                    ignoreDotfiles: ignoreDotfiles,
+                    format: format
+                )
+                for _ in 0..<600 {
+                    try Task.checkCancellation()
+                    let result = try await store.torrentPieceCount(taskID: taskID)
+                    if result.status == "Finished" {
+                        calculatedPieceCount = result.pieces ?? 0
+                        isCalculatingPieces = false
+                        return
+                    }
+                    if result.status == "Failed" {
+                        pieceCalculationError = result.errorMessage ?? "Piece-count calculation failed."
+                        isCalculatingPieces = false
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(500))
+                }
+                pieceCalculationError = "Piece-count calculation is taking longer than expected."
+            } catch is CancellationError {
+                return
+            } catch {
+                pieceCalculationError = error.localizedDescription
+            }
+            isCalculatingPieces = false
+        }
+    }
+
+    private func invalidatePieceCount() {
+        pieceCalculationTask?.cancel()
+        isCalculatingPieces = false
+        calculatedPieceCount = nil
+        pieceCalculationError = nil
     }
 
     private func loadTasks() async {

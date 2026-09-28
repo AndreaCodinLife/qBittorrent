@@ -34,7 +34,7 @@
 #include "base/bittorrent/addtorrentparams.h"
 
 BitTorrent::TorrentCreationTask::TorrentCreationTask(IApplication *app, const QString &id
-        , TorrentCreator *torrentCreator, bool startSeeding, QObject *parent)
+        , TorrentCreator *torrentCreator, bool startSeeding, const bool ignoreShareLimits, QObject *parent)
     : ApplicationComponent(app, parent)
     , m_id {id}
     , m_params {torrentCreator->params()}
@@ -54,7 +54,7 @@ BitTorrent::TorrentCreationTask::TorrentCreationTask(IApplication *app, const QS
     });
 
     connect(torrentCreator, &BitTorrent::TorrentCreator::creationSuccess, this
-            , [this, app, startSeeding](const TorrentCreatorResult &result)
+            , [this, app, startSeeding, ignoreShareLimits](const TorrentCreatorResult &result)
     {
         m_timeFinished = QDateTime::currentDateTime();
         m_result = result;
@@ -71,6 +71,14 @@ BitTorrent::TorrentCreationTask::TorrentCreationTask(IApplication *app, const QS
         params.stopCondition = BitTorrent::Torrent::StopCondition::None;
         params.useAutoTMM = false;  // otherwise if it is on by default, it will overwrite `savePath` to the default save path
         params.useDownloadPath = false;
+        if (ignoreShareLimits)
+        {
+            params.shareLimits = {
+                .ratioLimit = BitTorrent::NO_RATIO_LIMIT,
+                .seedingTimeLimit = BitTorrent::NO_SEEDING_TIME_LIMIT,
+                .inactiveSeedingTimeLimit = BitTorrent::NO_SEEDING_TIME_LIMIT
+            };
+        }
 
         if (!app->addTorrentManager()->addTorrent(result.torrentFilePath.data(), params))
             m_errorMsg = tr("Failed to start seeding.");

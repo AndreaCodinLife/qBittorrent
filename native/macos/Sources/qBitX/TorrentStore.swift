@@ -26,6 +26,7 @@ final class TorrentStore {
     private(set) var serverStatistics: ServerStatistics?
     private(set) var serverVersion = ""
     private(set) var serverAPIVersion = ""
+    private(set) var supportsTorrentCreatorExtensions = false
     private(set) var connectionError: String?
     private(set) var isConnected = false
     private(set) var hasCompletedInitialConnection = false
@@ -55,6 +56,7 @@ final class TorrentStore {
         isConnected = false
         serverVersion = ""
         serverAPIVersion = ""
+        supportsTorrentCreatorExtensions = false
         interfaceLocale = ""
         sessionSpeedHistory = []
         trackerSummaryRefreshedAt = nil
@@ -76,6 +78,12 @@ final class TorrentStore {
             }
             serverVersion = try await connectedAPI.verify()
             serverAPIVersion = (try? await connectedAPI.webAPIVersion()).flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+            if SavedRemoteConnection.load() == nil {
+                supportsTorrentCreatorExtensions = true
+            } else {
+                let capabilities = await connectedAPI.torrentCreatorCapabilities()
+                supportsTorrentCreatorExtensions = capabilities?.calculatePieces == true && capabilities?.ignoreShareLimits == true
+            }
             if let data = try? await connectedAPI.preferencesData(),
                let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 interfaceLocale = values["locale"] as? String ?? ""
@@ -220,9 +228,19 @@ final class TorrentStore {
         return true
     }
 
-    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, pieceSize: Int, format: String) async throws -> String {
+    func createTorrent(sourcePath: String, outputPath: String, trackers: String, webSeeds: String, comment: String, source: String, isPrivate: Bool, ignoreDotfiles: Bool, startSeeding: Bool, ignoreShareLimits: Bool, pieceSize: Int, format: String) async throws -> String {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, pieceSize: pieceSize, format: format)
+        return try await api.createTorrent(sourcePath: sourcePath, outputPath: outputPath, trackers: trackers, webSeeds: webSeeds, comment: comment, source: source, isPrivate: isPrivate, ignoreDotfiles: ignoreDotfiles, startSeeding: startSeeding, ignoreShareLimits: ignoreShareLimits, pieceSize: pieceSize, format: format)
+    }
+
+    func calculateTorrentPieces(sourcePath: String, pieceSize: Int, ignoreDotfiles: Bool, format: String) async throws -> String {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.calculateTorrentPieces(sourcePath: sourcePath, pieceSize: pieceSize, ignoreDotfiles: ignoreDotfiles, format: format)
+    }
+
+    func torrentPieceCount(taskID: String) async throws -> TorrentPieceCountStatus {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.torrentPieceCount(taskID: taskID)
     }
 
     func torrentCreationStatus(taskID: String) async throws -> TorrentCreationStatus {

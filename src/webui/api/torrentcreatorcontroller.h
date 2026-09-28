@@ -46,6 +46,9 @@ public:
 
 private slots:
     void addTaskAction();
+    void capabilitiesAction();
+    void calculatePiecesAction();
+    void pieceCountAction();
     void statusAction();
     void torrentFileAction();
     void deleteTaskAction();

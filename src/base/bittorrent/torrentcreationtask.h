@@ -52,7 +52,7 @@ namespace BitTorrent
         };
 
         TorrentCreationTask(IApplication *app, const QString &id, TorrentCreator *torrentCreator
-                , bool startSeeding, QObject *parent = nullptr);
+                , bool startSeeding, bool ignoreShareLimits = false, QObject *parent = nullptr);
 
         QString id() const;
         const TorrentCreatorParams &params() const;

@@ -30,8 +30,10 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include <QtContainerFwd>
+#include <QHash>
 #include <QObject>
 #include <QThreadPool>
 
@@ -42,6 +44,15 @@
 
 namespace BitTorrent
 {
+    struct TorrentPieceCountStatus
+    {
+        enum class State { Running, Finished, Failed };
+
+        State state = State::Running;
+        int pieces = 0;
+        QString errorMessage;
+    };
+
     class TorrentCreationManager final : public ApplicationComponent<QObject>
     {
         Q_OBJECT
@@ -51,13 +62,16 @@ namespace BitTorrent
         explicit TorrentCreationManager(IApplication *app, QObject *parent = nullptr);
         ~TorrentCreationManager() override;
 
-        std::shared_ptr<TorrentCreationTask> createTask(const TorrentCreatorParams &params, bool startSeeding = true);
+        std::shared_ptr<TorrentCreationTask> createTask(const TorrentCreatorParams &params, bool startSeeding = true, bool ignoreShareLimits = false);
         std::shared_ptr<TorrentCreationTask> getTask(const QString &id) const;
         QList<std::shared_ptr<TorrentCreationTask>> tasks() const;
         bool deleteTask(const QString &id);
+        QString calculatePieces(const TorrentCreatorParams &params);
+        std::optional<TorrentPieceCountStatus> pieceCountStatus(const QString &id) const;
 
     private:
         QString generateTaskID() const;
+        void finishPieceCount(const QString &id, const TorrentPieceCountStatus &status);
 
         CachedSettingValue<qint32> m_maxTasks;
         CachedSettingValue<qint32> m_numThreads;
@@ -66,5 +80,7 @@ namespace BitTorrent
         std::unique_ptr<TaskSet> m_tasks;
 
         QThreadPool m_threadPool;
+        QThreadPool m_pieceCountThreadPool;
+        QHash<QString, TorrentPieceCountStatus> m_pieceCountTasks;
     };
 }

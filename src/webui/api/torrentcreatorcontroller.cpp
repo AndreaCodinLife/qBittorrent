@@ -46,6 +46,7 @@ const QString KEY_COMMENT = u"comment"_s;
 const QString KEY_ERROR_MESSAGE = u"errorMessage"_s;
 const QString KEY_FORMAT = u"format"_s;
 const QString KEY_IGNORE_DOTFILES = u"ignoreDotfiles"_s;
+const QString KEY_IGNORE_SHARE_LIMITS = u"ignoreShareLimits"_s;
 const QString KEY_OPTIMIZE_ALIGNMENT = u"optimizeAlignment"_s;
 const QString KEY_PADDED_FILE_SIZE_LIMIT = u"paddedFileSizeLimit"_s;
 const QString KEY_PIECE_SIZE = u"pieceSize"_s;
@@ -151,11 +152,74 @@ void TorrentCreatorController::addTaskAction()
 
     const bool startSeeding = parseBool(params()[u"startSeeding"_s]).value_or(createTorrentParams.torrentFilePath.isEmpty());
 
-    const auto task = m_torrentCreationManager->createTask(createTorrentParams, startSeeding);
+    const bool ignoreShareLimits = parseBool(params()[KEY_IGNORE_SHARE_LIMITS]).value_or(false);
+    const auto task = m_torrentCreationManager->createTask(createTorrentParams, startSeeding, ignoreShareLimits);
     if (!task)
         throw APIError(APIErrorType::Conflict, tr("Too many active tasks"));
 
     setResult(QJsonObject {{KEY_TASK_ID, task->id()}});
+}
+
+void TorrentCreatorController::capabilitiesAction()
+{
+    setResult(QJsonObject {
+        {u"calculatePieces"_s, true},
+        {u"ignoreShareLimits"_s, true},
+    });
+}
+
+void TorrentCreatorController::calculatePiecesAction()
+{
+    requireParams({KEY_SOURCE_PATH});
+
+    BitTorrent::TorrentCreatorParams params;
+    params.sourcePath = Path(this->params()[KEY_SOURCE_PATH]);
+    params.ignoreDotfiles = parseBool(this->params()[KEY_IGNORE_DOTFILES]).value_or(true);
+    params.pieceSize = parseInt(this->params()[KEY_PIECE_SIZE]).value_or(0);
+#ifdef QBT_USES_LIBTORRENT2
+    params.torrentFormat = parseTorrentFormat(this->params()[KEY_FORMAT].toLower());
+#else
+    params.isAlignmentOptimized = parseBool(this->params()[KEY_OPTIMIZE_ALIGNMENT]).value_or(true);
+    params.paddedFileSizeLimit = parseInt(this->params()[KEY_PADDED_FILE_SIZE_LIMIT]).value_or(-1);
+#endif
+
+    const QString id = m_torrentCreationManager->calculatePieces(params);
+    if (id.isEmpty())
+        throw APIError(APIErrorType::Conflict, tr("Too many piece-count calculations are already running."));
+    setResult(QJsonObject {{KEY_TASK_ID, id}});
+}
+
+void TorrentCreatorController::pieceCountAction()
+{
+    requireParams({KEY_TASK_ID});
+    const QString id = params()[KEY_TASK_ID];
+    const auto status = m_torrentCreationManager->pieceCountStatus(id);
+    if (!status)
+        throw APIError(APIErrorType::NotFound);
+
+    QString statusText;
+    switch (status->state)
+    {
+    case BitTorrent::TorrentPieceCountStatus::State::Running:
+        statusText = u"Running"_s;
+        break;
+    case BitTorrent::TorrentPieceCountStatus::State::Finished:
+        statusText = u"Finished"_s;
+        break;
+    case BitTorrent::TorrentPieceCountStatus::State::Failed:
+        statusText = u"Failed"_s;
+        break;
+    }
+
+    QJsonObject result {
+        {KEY_TASK_ID, id},
+        {KEY_STATUS, statusText},
+    };
+    if (status->state == BitTorrent::TorrentPieceCountStatus::State::Finished)
+        result[u"pieces"_s] = status->pieces;
+    if (!status->errorMessage.isEmpty())
+        result[KEY_ERROR_MESSAGE] = status->errorMessage;
+    setResult(result);
 }
 
 void TorrentCreatorController::statusAction()
