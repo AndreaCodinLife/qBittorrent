@@ -151,160 +151,157 @@ struct RSSPane: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            HSplitView {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("FEEDS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        Spacer()
-                        Button { prepareAddFolder() } label: { Image(systemName: "folder.badge.plus") }
-                            .buttonStyle(.glass).help("Add RSS folder")
-                            .accessibilityLabel("Add RSS folder")
-                        Button { prepareAddFeed() } label: { Image(systemName: "plus") }
-                            .buttonStyle(.glass)
-                            .help("Add RSS feed")
-                            .accessibilityLabel("Add RSS feed")
+        HSplitView {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("FEEDS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { prepareAddFolder() } label: { Image(systemName: "folder.badge.plus") }
+                        .buttonStyle(.glass).help("Add RSS folder")
+                        .accessibilityLabel("Add RSS folder")
+                    Button { prepareAddFeed() } label: { Image(systemName: "plus") }
+                        .buttonStyle(.glass)
+                        .help("Add RSS feed")
+                        .accessibilityLabel("Add RSS feed")
+                }
+                .padding(12)
+                List(selection: $selectedFeedItems) {
+                    Section {
+                        Label("All", systemImage: "tray.full")
+                            .tag(RSSPaneSelection.allArticles)
+                            .contextMenu { rssAggregateContextMenu(.allArticles) }
+                        Label("Unread (\(unreadCount))", systemImage: "tray")
+                            .tag(RSSPaneSelection.unreadArticles)
+                            .contextMenu { rssAggregateContextMenu(.unreadArticles) }
                     }
-                    .padding(12)
-                    List(selection: $selectedFeedItems) {
-                        Section {
-                            Label("All", systemImage: "tray.full")
-                                .tag(RSSPaneSelection.allArticles)
-                                .contextMenu { rssAggregateContextMenu(.allArticles) }
-                            Label("Unread (\(unreadCount))", systemImage: "tray")
-                                .tag(RSSPaneSelection.unreadArticles)
-                                .contextMenu { rssAggregateContextMenu(.unreadArticles) }
-                        }
-                        Section {
-                            navigationRows(navigationNodes)
-                        } header: {
-                            Text("Subscriptions")
-                                .onDrop(of: [UTType.plainText], isTargeted: nil) {
-                                    receiveRSSDrop($0, into: "")
-                                }
-                        }
-                    }
-                    .listStyle(.sidebar)
-                    .onKeyPress(KeyEquivalent("\u{F705}")) {
-                        renameSelectedRSSItem()
-                        return .handled
-                    }
-                    .onDeleteCommand { beginRemoving(activeFeedSelection) }
-                    .onChange(of: selectedFeedItems) { oldItems, newItems in
-                        let inserted = newItems.subtracting(oldItems)
-                        if let insertedItem = inserted.first {
-                            activeFeedSelection = insertedItem
-                        } else if !newItems.contains(activeFeedSelection) {
-                            activeFeedSelection = newItems.first ?? .unreadArticles
-                        }
-                        selectedArticleIDs = []
+                    Section {
+                        navigationRows(navigationNodes)
+                    } header: {
+                        Text("Subscriptions")
+                            .onDrop(of: [UTType.plainText], isTargeted: nil) {
+                                receiveRSSDrop($0, into: "")
+                            }
                     }
                 }
-                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                .frame(minWidth: 190, idealWidth: 230)
-                VStack(spacing: 0) {
-                    if rssProcessingEnabled == false {
-                        Label("RSS processing is disabled in qBittorrent preferences.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
-                            .foregroundStyle(.orange)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                        Divider()
-                    }
-                    HStack {
-                        Text(selectedTitle).font(.headline)
-                        Spacer()
-                        Button("Downloader Rules…") { showsRules = true }
-                            .buttonStyle(.glass)
-                        Button { refreshSelectedRSSItems() } label: { Image(systemName: "arrow.clockwise") }
-                            .buttonStyle(.glass)
-                            .help("Refresh selected RSS feeds")
-                            .accessibilityLabel("Refresh selected RSS feeds")
-                    }
-                    .padding(12)
-                    Divider()
-                    if let errorMessage {
-                        ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
-                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                    } else {
-                        TextField("Filter articles…", text: $articleFilter)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Filter RSS articles")
-                            .padding(10)
-                        if visibleArticles.isEmpty {
-                            ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("There are no matching RSS articles."))
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            HStack {
-                                Text("\(visibleArticles.count) articles")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Mark Read") { markSelectedArticlesRead() }
-                                    .buttonStyle(.glass)
-                                    .disabled(selectedArticles.isEmpty)
-                                Button("Open Article") { openSelectedArticles() }
-                                    .buttonStyle(.glass)
-                                    .disabled(!selectedArticles.contains { Self.safeWebURL($0.link) != nil })
-                                Button("Add Torrent") { addSelectedArticles() }
-                                    .buttonStyle(.glassProminent)
-                                    .disabled(!selectedArticles.contains { Self.supportedTorrentURL(for: $0) != nil })
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-                            HSplitView {
-                                List(visibleArticles, selection: $selectedArticleIDs) { article in
-                                    HStack(spacing: 10) {
-                                        Image(systemName: article.isRead ? "circle" : "circle.fill")
-                                            .font(.caption2)
-                                            .foregroundStyle(articleColor(for: article))
-                                            .accessibilityHidden(true)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(article.title)
-                                                .fontWeight(article.isRead ? .regular : .semibold)
-                                                .foregroundStyle(articleColor(for: article))
-                                                .lineLimit(2)
-                                            Text(article.date).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer(minLength: 0)
-                                    }
-                                    .tag(article.selectionID)
-                                    .onTapGesture(count: 2) {
-                                        addTorrentArticles(articlesForAction(containing: article))
-                                    }
-                                    .contextMenu {
-                                        let actionArticles = articlesForAction(containing: article)
-                                        Button("Mark Read") { markArticlesRead(actionArticles) }
-                                        if actionArticles.contains(where: { Self.supportedTorrentURL(for: $0) != nil }) {
-                                            Button("Download Torrent") { addTorrentArticles(actionArticles) }
-                                        }
-                                        if actionArticles.contains(where: { Self.safeWebURL($0.link) != nil }) {
-                                            Button("Open Article URL") { openArticles(actionArticles) }
-                                        }
-                                    }
-                                }
-                                .listStyle(.plain)
-                                .frame(minWidth: 270)
-                                .onChange(of: selectedArticleIDs) { oldIDs, newIDs in
-                                    let deselectedIDs = oldIDs.subtracting(newIDs)
-                                    let deselected = feeds.flatMap(\.articles).filter { deselectedIDs.contains($0.selectionID) }
-                                    if !deselected.isEmpty { markArticlesRead(deselected) }
-                                }
-                                RSSArticlePreview(article: previewArticle, onOpenURL: openRSSURL)
-                                    .frame(minWidth: 280)
-                            }
-                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                        }
-                    }
+                .listStyle(.sidebar)
+                .onKeyPress(KeyEquivalent("\u{F705}")) {
+                    renameSelectedRSSItem()
+                    return .handled
                 }
-                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                .frame(minWidth: 350)
+                .onDeleteCommand { beginRemoving(activeFeedSelection) }
+                .onChange(of: selectedFeedItems) { oldItems, newItems in
+                    let inserted = newItems.subtracting(oldItems)
+                    if let insertedItem = inserted.first {
+                        activeFeedSelection = insertedItem
+                    } else if !newItems.contains(activeFeedSelection) {
+                        activeFeedSelection = newItems.first ?? .unreadArticles
+                    }
+                    selectedArticleIDs = []
+                }
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            .layoutPriority(1)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+            .frame(minWidth: 190, idealWidth: 230)
+            VStack(spacing: 0) {
+                if rssProcessingEnabled == false {
+                    Label("RSS processing is disabled in qBittorrent preferences.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    Divider()
+                }
+                HStack {
+                    Text(selectedTitle).font(.headline)
+                    Spacer()
+                    Button("Downloader Rules…") { showsRules = true }
+                        .buttonStyle(.glass)
+                    Button { refreshSelectedRSSItems() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.glass)
+                        .help("Refresh selected RSS feeds")
+                        .accessibilityLabel("Refresh selected RSS feeds")
+                }
+                .padding(12)
+                Divider()
+                if let errorMessage {
+                    ContentUnavailableView("RSS Unavailable", systemImage: "exclamationmark.triangle", description: Text(errorMessage))
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    TextField("Filter articles…", text: $articleFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Filter RSS articles")
+                        .padding(10)
+                    if visibleArticles.isEmpty {
+                        ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("There are no matching RSS articles."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        HStack {
+                            Text("\(visibleArticles.count) articles")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Mark Read") { markSelectedArticlesRead() }
+                                .buttonStyle(.glass)
+                                .disabled(selectedArticles.isEmpty)
+                            Button("Open Article") { openSelectedArticles() }
+                                .buttonStyle(.glass)
+                                .disabled(!selectedArticles.contains { Self.safeWebURL($0.link) != nil })
+                            Button("Add Torrent") { addSelectedArticles() }
+                                .buttonStyle(.glassProminent)
+                                .disabled(!selectedArticles.contains { Self.supportedTorrentURL(for: $0) != nil })
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                        HSplitView {
+                            List(visibleArticles, selection: $selectedArticleIDs) { article in
+                                HStack(spacing: 10) {
+                                    Image(systemName: article.isRead ? "circle" : "circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(articleColor(for: article))
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(article.title)
+                                            .fontWeight(article.isRead ? .regular : .semibold)
+                                            .foregroundStyle(articleColor(for: article))
+                                            .lineLimit(2)
+                                        Text(article.date).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .tag(article.selectionID)
+                                .onTapGesture(count: 2) {
+                                    addTorrentArticles(articlesForAction(containing: article))
+                                }
+                                .contextMenu {
+                                    let actionArticles = articlesForAction(containing: article)
+                                    Button("Mark Read") { markArticlesRead(actionArticles) }
+                                    if actionArticles.contains(where: { Self.supportedTorrentURL(for: $0) != nil }) {
+                                        Button("Download Torrent") { addTorrentArticles(actionArticles) }
+                                    }
+                                    if actionArticles.contains(where: { Self.safeWebURL($0.link) != nil }) {
+                                        Button("Open Article URL") { openArticles(actionArticles) }
+                                    }
+                                }
+                            }
+                            .listStyle(.plain)
+                            .frame(minWidth: 270)
+                            .onChange(of: selectedArticleIDs) { oldIDs, newIDs in
+                                let deselectedIDs = oldIDs.subtracting(newIDs)
+                                let deselected = feeds.flatMap(\.articles).filter { deselectedIDs.contains($0.selectionID) }
+                                if !deselected.isEmpty { markArticlesRead(deselected) }
+                            }
+                            RSSArticlePreview(article: previewArticle, onOpenURL: openRSSURL)
+                                .frame(minWidth: 280)
+                        }
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+            .frame(minWidth: 350)
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
         .task(id: store.isConnected) {
             guard store.isConnected else { return }
             await reload()
