@@ -875,14 +875,19 @@ final class TorrentStore {
         return try await api.rssRulesData()
     }
 
-    func exportRSSRules() async throws -> Data {
+    func rssRuleFileFormats() async throws -> Set<String> {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.exportRSSRules()
+        return try await api.rssRuleFileFormats()
     }
 
-    func importRSSRules(_ data: Data) async throws {
+    func exportRSSRules(format: String = "json") async throws -> Data {
         guard let api else { throw TorrentStoreError.disconnected }
-        try await api.importRSSRules(data)
+        return try await api.exportRSSRules(format: format)
+    }
+
+    func importRSSRules(_ data: Data, format: String = "json") async throws {
+        guard let api else { throw TorrentStoreError.disconnected }
+        try await api.importRSSRules(data, format: format)
     }
 
     func setRSSRule(name: String, definition: String) async throws {

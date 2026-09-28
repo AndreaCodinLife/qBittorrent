@@ -190,9 +190,28 @@ void RSSController::setRuleAction()
 
 void RSSController::exportRulesAction()
 {
-    setResult(RSS::AutoDownloader::instance()->exportRules(
-        RSS::AutoDownloader::RulesFileFormat::JSON), u"application/json"_s
-        , u"rss-downloader-rules.json"_s);
+    const QString format {params().value(u"format"_s, u"json"_s)};
+    if (format == u"json")
+    {
+        setResult(RSS::AutoDownloader::instance()->exportRules(
+            RSS::AutoDownloader::RulesFileFormat::JSON), u"application/json"_s
+            , u"rss-downloader-rules.json"_s);
+    }
+    else if (format == u"legacy")
+    {
+        setResult(RSS::AutoDownloader::instance()->exportRules(
+            RSS::AutoDownloader::RulesFileFormat::Legacy), u"application/octet-stream"_s
+            , u"rss-downloader-rules.rssrules"_s);
+    }
+    else
+    {
+        throw APIError(APIErrorType::BadParams, tr("Unsupported RSS rules format"));
+    }
+}
+
+void RSSController::ruleFormatsAction()
+{
+    setResult(QJsonObject {{u"formats"_s, QJsonArray {u"json"_s, u"legacy"_s}}});
 }
 
 void RSSController::importRulesAction()
@@ -200,10 +219,19 @@ void RSSController::importRulesAction()
     if (data().size() != 1)
         throw APIError(APIErrorType::BadParams, tr("Exactly one rules file is required"));
 
+    const QString format {params().value(u"format"_s, u"json"_s)};
+    RSS::AutoDownloader::RulesFileFormat rulesFormat;
+    if (format == u"json")
+        rulesFormat = RSS::AutoDownloader::RulesFileFormat::JSON;
+    else if (format == u"legacy")
+        rulesFormat = RSS::AutoDownloader::RulesFileFormat::Legacy;
+    else
+        throw APIError(APIErrorType::BadParams, tr("Unsupported RSS rules format"));
+
     try
     {
         RSS::AutoDownloader::instance()->importRules(data().cbegin().value()
-            , RSS::AutoDownloader::RulesFileFormat::JSON);
+            , rulesFormat);
     }
     catch (const RSS::ParsingError &error)
     {

@@ -8,6 +8,7 @@ struct RSSRulesView: View {
     let store: TorrentStore
     @State private var rules: [String: [String: Any]] = [:]
     @State private var feedURLs: [String] = []
+    @State private var supportsLegacyRuleFiles = false
     @State private var selectedName: String?
     @State private var selectedRuleNames: Set<String> = []
     @FocusState private var isRuleNameFieldFocused: Bool
@@ -35,6 +36,14 @@ struct RSSRulesView: View {
     @State private var pendingRemoveRuleNames: [String] = []
     @State private var matchLoadID = UUID()
 
+    private var legacyRuleFileType: UTType {
+        UTType(filenameExtension: "rssrules", conformingTo: .data) ?? .data
+    }
+
+    private var importRuleFileTypes: [UTType] {
+        supportsLegacyRuleFiles ? [.json, legacyRuleFileType] : [.json]
+    }
+
     private var mustContainValidationError: String? {
         RSSRuleValidation.regularExpressionError(for: mustContain, enabled: useRegex)
     }
@@ -58,66 +67,75 @@ struct RSSRulesView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("RSS Downloader Rules").font(.headline)
-                    Spacer()
-                    Button("Import…") { showsImport = true }.buttonStyle(.glass)
-                    Button("Export…", action: exportRules).buttonStyle(.glass)
-                    Button { createRule() } label: { Image(systemName: "plus") }.buttonStyle(.glass)
-                        .help("Add rule")
-                        .accessibilityLabel("Add RSS downloader rule")
-                    Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
-                        .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
-                        .help("Remove selected rules")
-                        .accessibilityLabel("Remove selected RSS downloader rules")
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("RSS Downloader Rules").font(.headline)
+                Spacer(minLength: 12)
+                Button("Import Rules…") { showsImport = true }.buttonStyle(.glass)
+                Button("Export JSON…") { exportRules(format: "json") }
+                    .buttonStyle(.glass)
+                    .disabled(rules.isEmpty || isSaving)
+                    .help(rules.isEmpty ? "Add or import a rule before exporting." : "Export rules as JSON")
+                if supportsLegacyRuleFiles {
+                    Button("Export .rssrules…") { exportRules(format: "legacy") }
+                        .buttonStyle(.glass)
+                        .disabled(rules.isEmpty || isSaving)
+                        .help(rules.isEmpty ? "Add or import a rule before exporting." : "Export rules in qBittorrent's legacy format")
                 }
-                .padding(12)
-                List(selection: $selectedRuleNames) {
-                    ForEach(rules.keys.sorted(), id: \.self) { name in
-                        HStack {
-                            Image(systemName: (rules[name]?["enabled"] as? Bool ?? true) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle((rules[name]?["enabled"] as? Bool ?? true) ? .green : .secondary)
-                            Text(name).lineLimit(1)
-                        }
-                        .tag(name)
-                        .onTapGesture(count: 2) { renameRule(named: name) }
-                        .contextMenu {
-                            if selectedRuleNames.count > 1, selectedRuleNames.contains(name) {
-                                Button("Remove Selected Rules", role: .destructive) {
-                                    requestRemoval(of: selectedRuleNames)
-                                }
-                                Button("Clear Downloaded Episodes…") {
-                                    pendingClearDownloadHistoryRules = selectedRuleNames.sorted()
-                                }
-                            } else {
-                                Button("Enable/Disable") { toggleRule(name) }
-                                Button("Rename…") { renameRule(named: name) }
-                                Button("Clone…") { clone(name) }
-                                Button("Remove", role: .destructive) { requestRemoval(of: [name]) }
-                                Button("Clear Downloaded Episodes…") {
-                                    pendingClearDownloadHistoryRules = [name]
+                Button(role: .destructive) { removeSelected() } label: { Image(systemName: "trash") }
+                    .buttonStyle(.glass).disabled(selectedRuleNames.isEmpty || isSaving)
+                    .help("Remove selected rules")
+                    .accessibilityLabel("Remove selected RSS downloader rules")
+            }
+            .padding(12)
+            Divider()
+
+            NavigationSplitView {
+                VStack(spacing: 0) {
+                    List(selection: $selectedRuleNames) {
+                        ForEach(rules.keys.sorted(), id: \.self) { name in
+                            HStack {
+                                Image(systemName: (rules[name]?["enabled"] as? Bool ?? true) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle((rules[name]?["enabled"] as? Bool ?? true) ? .green : .secondary)
+                                Text(name).lineLimit(1)
+                            }
+                            .tag(name)
+                            .onTapGesture(count: 2) { renameRule(named: name) }
+                            .contextMenu {
+                                if selectedRuleNames.count > 1, selectedRuleNames.contains(name) {
+                                    Button("Remove Selected Rules", role: .destructive) {
+                                        requestRemoval(of: selectedRuleNames)
+                                    }
+                                    Button("Clear Downloaded Episodes…") {
+                                        pendingClearDownloadHistoryRules = selectedRuleNames.sorted()
+                                    }
+                                } else {
+                                    Button("Enable/Disable") { toggleRule(name) }
+                                    Button("Rename…") { renameRule(named: name) }
+                                    Button("Clone…") { clone(name) }
+                                    Button("Remove", role: .destructive) { requestRemoval(of: [name]) }
+                                    Button("Clear Downloaded Episodes…") {
+                                        pendingClearDownloadHistoryRules = [name]
+                                    }
                                 }
                             }
                         }
                     }
+                    .listStyle(.sidebar)
+                    .onKeyPress(KeyEquivalent("\u{F705}")) {
+                        renameSelectedRule()
+                        return .handled
+                    }
+                    .onDeleteCommand { removeSelected() }
+                    HStack {
+                        TextField("New rule name", text: $newName).textFieldStyle(.roundedBorder)
+                        Button("Add") { createRule() }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .padding(10)
                 }
-                .listStyle(.sidebar)
-                .onKeyPress(KeyEquivalent("\u{F705}")) {
-                    renameSelectedRule()
-                    return .handled
-                }
-                .onDeleteCommand { removeSelected() }
-                HStack {
-                    TextField("New rule name", text: $newName).textFieldStyle(.roundedBorder)
-                    Button("Add") { createRule() }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .padding(10)
-            }
-            .navigationSplitViewColumnWidth(min: 230, ideal: 270)
-        } detail: {
-            VStack(spacing: 0) {
+                .navigationSplitViewColumnWidth(min: 230, ideal: 270)
+            } detail: {
+                VStack(spacing: 0) {
                 HStack {
                     Text(detailTitle).font(.title2.weight(.semibold))
                     Spacer()
@@ -136,6 +154,8 @@ struct RSSRulesView: View {
                 if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red).padding(8) }
                 if selectedRuleNames.count > 1 {
                     multipleRulesForm
+                } else if rules.isEmpty {
+                    ContentUnavailableView("No RSS Rules", systemImage: "dot.radiowaves.left.and.right", description: Text("Import a rule set or create a rule in the sidebar."))
                 } else if selectedName == nil {
                     ContentUnavailableView("No Rule Selected", systemImage: "dot.radiowaves.left.and.right", description: Text("Create or select a rule to configure automatic torrent downloads."))
                 } else {
@@ -218,6 +238,7 @@ struct RSSRulesView: View {
                     }
                     .formStyle(.grouped)
                 }
+                }
             }
         }
         .frame(minWidth: 900, minHeight: 700)
@@ -270,14 +291,29 @@ struct RSSRulesView: View {
                 ? "Are you sure you want to remove ‘\(pendingRemoveRuleNames[0])’?"
                 : "Are you sure you want to remove the selected download rules?")
         }
-        .fileImporter(isPresented: $showsImport, allowedContentTypes: [.json]) { result in
+        .fileImporter(isPresented: $showsImport, allowedContentTypes: importRuleFileTypes) { result in
             do {
                 let url = try result.get()
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
+                let maximumFileSize = 10 * 1024 * 1024
+                guard let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                      fileSize <= maximumFileSize else {
+                    errorMessage = "RSS rule files must be 10 MB or smaller."
+                    return
+                }
+                let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                guard data.count <= maximumFileSize else {
+                    errorMessage = "RSS rule files must be 10 MB or smaller."
+                    return
+                }
+                let format = url.pathExtension.lowercased() == "rssrules" ? "legacy" : "json"
+                guard format != "legacy" || supportsLegacyRuleFiles else {
+                    errorMessage = "Legacy .rssrules files require a qBitX-compatible qBittorrent server."
+                    return
+                }
                 Task {
-                    do { try await store.importRSSRules(data); await reload() }
+                    do { try await store.importRSSRules(data, format: format); await reload() }
                     catch { errorMessage = error.localizedDescription }
                 }
             } catch { errorMessage = error.localizedDescription }
@@ -366,6 +402,7 @@ struct RSSRulesView: View {
     }
 
     private func reload() async {
+        supportsLegacyRuleFiles = (try? await store.rssRuleFileFormats().contains("legacy")) ?? false
         do {
             let data = try await store.rssRulesData()
             guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { throw APIError.badResponse }
@@ -597,14 +634,19 @@ struct RSSRulesView: View {
         }
     }
 
-    private func exportRules() {
+    private func exportRules(format: String) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "rss-downloader-rules.json"
+        if format == "legacy" {
+            panel.allowedContentTypes = [legacyRuleFileType]
+            panel.nameFieldStringValue = "rss-downloader-rules.rssrules"
+        } else {
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "rss-downloader-rules.json"
+        }
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
             Task {
-                do { try await store.exportRSSRules().write(to: destination, options: .atomic) }
+                do { try await store.exportRSSRules(format: format).write(to: destination, options: .atomic) }
                 catch { errorMessage = error.localizedDescription }
             }
         }

@@ -614,11 +614,22 @@ actor QBittorrentAPI {
 
     func rssRulesData() async throws -> Data { try await request("rss/rules") }
 
-    func exportRSSRules() async throws -> Data { try await request("rss/exportRules") }
+    func rssRuleFileFormats() async throws -> Set<String> {
+        let data = try await request("rss/ruleFormats")
+        let response = try JSONDecoder().decode(RSSRuleFileFormats.self, from: data)
+        return Set(response.formats)
+    }
 
-    func importRSSRules(_ data: Data) async throws {
+    func exportRSSRules(format: String = "json") async throws -> Data {
+        try await request("rss/exportRules", query: ["format": format])
+    }
+
+    func importRSSRules(_ data: Data, format: String = "json") async throws {
         let boundary = "qBitX-RSS-\(UUID().uuidString)"
-        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"rules\"; filename=\"rules.json\"\r\nContent-Type: application/json\r\n\r\n".utf8)
+        let filename = format == "legacy" ? "rules.rssrules" : "rules.json"
+        let mimeType = format == "legacy" ? "application/octet-stream" : "application/json"
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"format\"\r\n\r\n\(format)\r\n".utf8)
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"rules\"; filename=\"\(filename)\"\r\nContent-Type: \(mimeType)\r\n\r\n".utf8))
         body.append(data)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         _ = try await request("rss/importRules", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
@@ -1384,6 +1395,8 @@ struct TorrentMetadataFile: Decodable, Identifiable, Sendable {
 }
 
 private struct TorrentCreationResponse: Decodable { let taskID: String }
+
+private struct RSSRuleFileFormats: Decodable { let formats: [String] }
 
 struct TorrentCreatorCapabilities: Decodable, Sendable {
     let calculatePieces: Bool

@@ -49,6 +49,7 @@ private slots:
     void markAsReadAction();
     void refreshItemAction();
     void setRuleAction();
+    void ruleFormatsAction();
     void exportRulesAction();
     void importRulesAction();
     void renameRuleAction();
