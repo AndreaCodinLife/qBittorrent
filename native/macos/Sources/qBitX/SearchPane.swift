@@ -348,6 +348,7 @@ struct SearchPane: View {
         .sheet(item: $addOptionsSearchResult, onDismiss: presentNextAddOptions) { result in
             AddTorrentSheet(file: nil, store: store, initialURL: result.fileUrl, initialDownloader: result.engineName) { url, downloader, options in
                 try await store.add(url: url, downloader: downloader, options: options)
+                return false
             }
         }
         .onChange(of: searchHistoryLength) { _, length in

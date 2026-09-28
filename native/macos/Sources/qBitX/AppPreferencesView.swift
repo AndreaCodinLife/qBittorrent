@@ -45,6 +45,7 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
+    @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.searchHistoryLength") private var searchHistoryLength = 50
     @AppStorage("qBitX.closeSearchTabWithMiddleClick") private var closeSearchTabWithMiddleClick = true
 
@@ -83,6 +84,14 @@ struct AppPreferencesView: View {
                 Section("When Adding Torrents") {
                     Toggle("Show torrent addition options", isOn: $showTorrentAdditionDialog)
                     Text("When off, new torrents use the connected qBittorrent server’s default add settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Delete local .torrent source", selection: $autoDeleteTorrentFileMode) {
+                        Text("Never").tag(0)
+                        Text("After successful add").tag(1)
+                        Text("After add or cancellation").tag(2)
+                    }
+                    Text("This applies to local .torrent files opened or selected in qBitX. Deletion can remove the source permanently; each add sheet can keep its source file.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -80,6 +80,7 @@ private struct PreferenceItem: Identifiable {
         }
         let sensitive = key.contains("password") || key.contains("api_key")
         let managed = bundled && ["web_ui_address", "web_ui_port", "bypass_local_auth", "web_ui_username", "use_https", "ssl_listen_port"].contains(key)
+        let readOnly = key.contains("api_key") || managed || ["current_interface_name", "add_trackers_url_list"].contains(key)
         let writeOnlySecret = key.contains("password")
         let shownValue = writeOnlySecret ? "" : (key.contains("api_key") && !draft.isEmpty ? "••••••" : draft)
         return PreferenceItem(
@@ -88,7 +89,7 @@ private struct PreferenceItem: Identifiable {
             label: label(for: key),
             kind: kind,
             sensitive: sensitive,
-            readOnly: key.contains("api_key") || managed,
+            readOnly: readOnly,
             choices: choices(for: key),
             draft: shownValue,
             original: shownValue
@@ -261,6 +262,8 @@ private struct PreferenceItem: Identifiable {
         case "store_search_jobs": return "Store opened search tabs"
         case "store_search_job_results": return "Also store search results"
         case "search_enabled": return "Enable search"
+        case "add_trackers_url_list": return "Fetched trackers"
+        case "current_interface_name": return "Selected interface name"
         default: break
         }
         let acronyms: Set<String> = ["api", "dht", "i2p", "lsd", "pex", "rss", "smtp", "ssl", "upnp", "url", "webui"]
@@ -298,11 +301,12 @@ private struct PreferenceItem: Identifiable {
             "dyndns_service": "Dynamic DNS provider used for domain updates.",
             "file_log_age_type": "Unit used for the file log retention age.",
             "add_trackers": "One tracker URL per line to append to torrents when adding them.",
-            "add_trackers_url_list": "Tracker URLs returned from the configured tracker list source.",
             "banned_IPs": "IP addresses or ranges blocked from connecting to this client.",
             "bypass_auth_subnet_whitelist": "Subnets allowed to bypass Web UI authentication, one per line.",
             "excluded_file_names": "File name patterns excluded from torrents, one per line.",
             "rss_smart_episode_filters": "Episode patterns used by RSS automatic downloader rules.",
+            "add_trackers_url_list": "Trackers currently returned by the configured tracker list URL.",
+            "current_interface_name": "Name of the selected network interface. Choose the interface by its system name above.",
             "web_ui_custom_http_headers": "Custom Web UI response headers in Header: value format, one per line.",
             "web_ui_reverse_proxies_list": "Trusted reverse proxy IP addresses or subnets, separated by semicolons.",
             "scheduler_days": "Days when qBittorrent switches to the alternative speed limits.",
@@ -347,16 +351,33 @@ private struct PreferenceItem: Identifiable {
 
     private static func section(for key: String) -> String {
         if key.hasPrefix("rss_") { return "RSS" }
-        if key.hasPrefix("web_ui_") || key.hasPrefix("alternative_webui") || key.hasPrefix("bypass_auth") { return "WebUI" }
+        if key.hasPrefix("web_ui_") || key.hasPrefix("alternative_webui") || key.hasPrefix("bypass_auth") || key.hasPrefix("dyndns_") { return "WebUI" }
         if key.contains("search") || key.hasPrefix("python_") { return "Search" }
-        if ["max_ratio_enabled", "max_ratio", "max_ratio_act", "max_seeding_time_enabled", "max_seeding_time", "max_inactive_seeding_time_enabled", "max_inactive_seeding_time", "share_limits_mode"].contains(key) { return "BitTorrent" }
+        if key.hasPrefix("file_log_") || key.hasPrefix("confirm_") || key.hasPrefix("status_bar_")
+            || ["locale", "performance_warning", "delete_torrent_content_files", "start_paused"].contains(key) { return "Behavior" }
+        if advancedPreferenceKeys.contains(key) { return "Advanced" }
+        if bittorrentPreferenceKeys.contains(key) { return "BitTorrent" }
         if key.contains("limit") || key.hasPrefix("schedule_") || key == "scheduler_enabled" || key == "scheduler_days" { return "Speed" }
-        if key.contains("proxy") || key.contains("port") || key.contains("interface") || key.hasPrefix("dyndns_") || key.hasPrefix("i2p_") || key.hasPrefix("ip_filter") || key == "upnp" || key == "banned_IPs" { return "Connection" }
-        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") || ["torrent_content_layout", "torrent_stop_condition", "add_to_top_of_queue", "add_stopped_enabled", "merge_trackers", "auto_delete_mode", "use_unwanted_folder"].contains(key) { return "Downloads" }
-        if ["dht", "pex", "lsd", "encryption", "queueing_enabled", "anonymous_mode", "bittorrent_protocol"].contains(key) || key.hasPrefix("max_active") { return "BitTorrent" }
-        if key.hasPrefix("confirm_") || key.hasPrefix("status_bar_") || key.hasPrefix("file_log_") || key.hasPrefix("mail_notification_") || key.hasPrefix("autorun") || key == "locale" || key == "start_paused" { return "Behavior" }
+        if key.contains("proxy") || key.contains("port") || key.contains("interface") || key.hasPrefix("i2p_") || key.hasPrefix("ip_filter") || key == "upnp" || key == "banned_IPs" { return "Connection" }
+        if key.contains("path") || key.hasPrefix("auto_tmm") || key.hasPrefix("preallocate") || key.hasPrefix("incomplete_") || key.hasPrefix("scan_dirs") || key.hasPrefix("excluded_file_names") || key.hasPrefix("mail_notification_") || key.hasPrefix("autorun") || key.hasPrefix("torrent_files_backup") || ["torrent_content_layout", "torrent_stop_condition", "add_to_top_of_queue", "add_stopped_enabled", "merge_trackers", "auto_delete_mode", "use_unwanted_folder"].contains(key) { return "Downloads" }
         return "Advanced"
     }
+
+    private static let advancedPreferenceKeys: Set<String> = [
+        "current_network_interface", "current_interface_address", "current_interface_name",
+        "memory_working_set_limit", "resume_data_storage_type", "save_resume_data_interval",
+        "torrent_content_remove_option"
+    ]
+
+    private static let bittorrentPreferenceKeys: Set<String> = [
+        "dht", "pex", "lsd", "encryption", "anonymous_mode", "bittorrent_protocol", "queueing_enabled",
+        "max_active_checking_torrents", "max_active_downloads", "max_active_uploads", "max_active_torrents",
+        "dont_count_slow_torrents", "slow_torrent_dl_rate_threshold", "slow_torrent_ul_rate_threshold",
+        "slow_torrent_inactive_timer", "max_ratio_enabled", "max_ratio", "max_ratio_act",
+        "max_seeding_time_enabled", "max_seeding_time", "max_inactive_seeding_time_enabled",
+        "max_inactive_seeding_time", "share_limits_mode", "add_trackers_enabled", "add_trackers",
+        "add_trackers_from_url_enabled", "add_trackers_url", "add_trackers_url_list"
+    ]
 }
 
 private enum PreferenceError: LocalizedError {
@@ -491,10 +512,11 @@ struct BackendPreferencesView: View {
                                     .accessibilityHint(item.explanation)
                                     .disabled(item.id == "store_search_job_results"
                                         && items.first(where: { $0.id == "store_search_jobs" })?.draft != "true")
-                                } else if item.isMultiline && !item.readOnly {
+                                } else if item.isMultiline {
                                     TextEditor(text: $item.draft)
                                         .font(.system(.caption, design: .monospaced))
                                         .frame(minHeight: 72, maxHeight: 96)
+                                        .disabled(item.readOnly)
                                         .scrollContentBackground(.hidden)
                                         .padding(4)
                                         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))

@@ -1,6 +1,7 @@
 import SwiftUI
 import Charts
 import UniformTypeIdentifiers
+import TorrentSourceFileSupport
 import LocalAuthentication
 
 private enum MainTab: String, CaseIterable, Identifiable {
@@ -115,6 +116,7 @@ struct ContentView: View {
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
     @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
+    @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingDoubleClickAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedDoubleClickAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
@@ -463,16 +465,23 @@ struct ContentView: View {
         }) {
             AddTorrentSheet(file: nil, store: store, initialURL: incomingTorrentURL ?? "", showOptions: showTorrentAdditionDialog) { url, downloader, options in
                 try await store.add(url: url, downloader: downloader, options: options)
+                return false
             }
         }
         .sheet(item: $pendingTorrentFile, onDismiss: presentNextExternalURLIfReady) { file in
             AddTorrentSheet(file: file, store: store, showOptions: showTorrentAdditionDialog) { source, _, options in
                 if source.hasPrefix("magnet:") {
                     try await store.add(url: source, options: options)
+                    return false
                 } else {
                     var uploadOptions = options
                     uploadOptions.filePriorities = nil
-                    try await store.add(file: file.data, filename: file.name, options: uploadOptions)
+                    return try await store.add(
+                        file: file.data,
+                        filename: file.name,
+                        options: uploadOptions,
+                        verifyNewTorrent: autoDeleteTorrentFileMode > 0
+                    ) != nil
                 }
             }
         }
@@ -519,7 +528,7 @@ struct ContentView: View {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
-                let file = PendingTorrentFile(name: url.lastPathComponent, data: data)
+                let file = PendingTorrentFile(name: url.lastPathComponent, data: data, sourceURL: url)
                 if showTorrentAdditionDialog {
                     pendingTorrentFile = file
                 } else {
@@ -756,7 +765,7 @@ struct ContentView: View {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    let file = PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url))
+                    let file = PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url), sourceURL: url)
                     if showTorrentAdditionDialog {
                         pendingTorrentFile = file
                     } else {
@@ -793,7 +802,15 @@ struct ContentView: View {
         Task {
             do {
                 let options = try await defaultTorrentAddOptions()
-                try await store.add(file: file.data, filename: file.name, options: options)
+                let addedTorrentID = try await store.add(
+                    file: file.data,
+                    filename: file.name,
+                    options: options,
+                    verifyNewTorrent: autoDeleteTorrentFileMode > 0
+                )
+                if addedTorrentID != nil && autoDeleteTorrentFileMode > 0 {
+                    try removeLocalTorrentSource(file)
+                }
             } catch { actionError = error.localizedDescription }
             isAddingExternalTorrent = false
             presentNextExternalURLIfReady()
@@ -2441,7 +2458,15 @@ struct ContentView: View {
                     var options = TorrentAddOptions()
                     options.savePath = candidate.savePath
                     options.automaticManagement = false
-                    try await store.add(file: data, filename: candidate.filename, options: options)
+                    let addedTorrentID = try await store.add(
+                        file: data,
+                        filename: candidate.filename,
+                        options: options,
+                        verifyNewTorrent: autoDeleteTorrentFileMode > 0
+                    )
+                    if addedTorrentID != nil && autoDeleteTorrentFileMode > 0 {
+                        try removeLocalTorrentSource(PendingTorrentFile(name: candidate.filename, data: data, sourceURL: url))
+                    }
                 } catch {
                     failures.append("\(candidate.filename): \(error.localizedDescription)")
                 }
@@ -2932,6 +2957,12 @@ struct PendingTorrentFile: Identifiable {
     let id = UUID()
     let name: String
     let data: Data
+    let sourceURL: URL?
+}
+
+private func removeLocalTorrentSource(_ file: PendingTorrentFile) throws {
+    guard let url = file.sourceURL else { return }
+    try TorrentSourceFileSupport.removeIfUnchanged(at: url, matching: file.data)
 }
 
 private struct AddTorrentPathProfile: Codable {
@@ -2980,12 +3011,13 @@ struct AddTorrentSheet: View {
     @AppStorage("qBitX.addTorrent.rememberLastSavePath") private var rememberLastSavePath = false
     @AppStorage("qBitX.addTorrent.pathProfiles") private var pathProfilesJSON = "{}"
     @AppStorage("qBitX.addTorrent.fileFilterMode") private var fileFilterMode = "wildcards"
+    @AppStorage("qBitX.autoDeleteTorrentFileMode") private var autoDeleteTorrentFileMode = 0
     let file: PendingTorrentFile?
     let store: TorrentStore
     let showOptions: Bool
     let initialURL: String
     let initialDownloader: String?
-    let onAdd: (String, String?, TorrentAddOptions) async throws -> Void
+    let onAdd: (String, String?, TorrentAddOptions) async throws -> Bool
     @State private var url = ""
     @State private var savePath = ""
     @State private var downloadPathEnabled = false
@@ -3015,8 +3047,9 @@ struct AddTorrentSheet: View {
     @State private var serverDefaultAddOptions = TorrentAddOptions()
     @State private var serverFreeSpace: Int64?
     @State private var didAddTorrent = false
+    @State private var keepTorrentSourceFile = false
 
-    init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, showOptions: Bool = true, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Void) {
+    init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, showOptions: Bool = true, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Bool) {
         self.file = file
         self.store = store
         self.showOptions = showOptions
@@ -3145,6 +3178,10 @@ struct AddTorrentSheet: View {
                         Toggle("Seed mode", isOn: $seedMode)
                         Toggle("Download in sequential order", isOn: $sequential)
                         Toggle("Prioritize first and last pieces", isOn: $firstLastPiece)
+                        if file?.sourceURL != nil && autoDeleteTorrentFileMode > 0 {
+                            Toggle("Keep source .torrent file", isOn: $keepTorrentSourceFile)
+                                .help("Keep this file even when qBitX is set to delete .torrent sources after adding.")
+                        }
                         Picker("Stop condition", selection: $stopCondition) {
                             Text("None").tag("None")
                             Text("Metadata received").tag("MetadataReceived")
@@ -3290,7 +3327,7 @@ struct AddTorrentSheet: View {
                     }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel", action: cancelAdd).keyboardShortcut(.cancelAction).disabled(isAdding)
                 Button(didAddTorrent ? "Done" : "Add Torrent") {
                     if didAddTorrent { dismiss(); return }
                     isAdding = true
@@ -3320,8 +3357,16 @@ struct AddTorrentSheet: View {
                             }
                             let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
                             if setDefaultCategory { defaultCategory = options.category }
-                            try await onAdd(source, initialDownloader, options)
+                            let torrentWasAdded = try await onAdd(source, initialDownloader, options)
                             didAddTorrent = true
+                            if torrentWasAdded, autoDeleteTorrentFileMode > 0, !keepTorrentSourceFile, let file {
+                                do { try removeLocalTorrentSource(file) }
+                                catch {
+                                    errorMessage = "The torrent was added, but qBitX could not delete its source file: \(error.localizedDescription)"
+                                    isAdding = false
+                                    return
+                                }
+                            }
                             if let hash = metadata?.id ?? metadata?.infohash_v1 ?? metadata?.infohash_v2 {
                                 do {
                                     for item in files {
@@ -3354,6 +3399,11 @@ struct AddTorrentSheet: View {
             if showOptions && (file != nil || !initialURL.isEmpty) { await loadMetadata() }
         }
         .task(id: savePath) { await refreshServerFreeSpace(at: savePath) }
+        .onDisappear {
+            if !didAddTorrent, autoDeleteTorrentFileMode == 2, !keepTorrentSourceFile, let file {
+                try? removeLocalTorrentSource(file)
+            }
+        }
     }
 
     private var isReadyToAdd: Bool {
@@ -3362,6 +3412,17 @@ struct AddTorrentSheet: View {
             && !isAdding
             && !hasInvalidRenamedFilePaths
             && (!showOptions || ((0...1_000_000).contains(downloadLimit) && (0...1_000_000).contains(uploadLimit)))
+    }
+
+    private func cancelAdd() {
+        if autoDeleteTorrentFileMode == 2, !keepTorrentSourceFile, let file {
+            do { try removeLocalTorrentSource(file) }
+            catch {
+                errorMessage = "qBitX could not delete the cancelled torrent source: \(error.localizedDescription)"
+                return
+            }
+        }
+        dismiss()
     }
 
     private func loadServerDefaults() async {

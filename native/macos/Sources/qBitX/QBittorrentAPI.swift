@@ -132,6 +132,10 @@ actor QBittorrentAPI {
         }
     }
 
+    func torrentIDs() async throws -> Set<String> {
+        Set(try await torrents().map { $0.id.lowercased() })
+    }
+
     func transferStatus() async throws -> TransferStatus {
         let data = try await request("transfer/info")
         let response = try JSONDecoder().decode(TransferResponse.self, from: data)
@@ -731,7 +735,7 @@ actor QBittorrentAPI {
         try checkAddResult(data)
     }
 
-    func add(file data: Data, filename: String, options: TorrentAddOptions = TorrentAddOptions()) async throws {
+    func add(file data: Data, filename: String, options: TorrentAddOptions = TorrentAddOptions()) async throws -> String? {
         try await ensureCategory(options.category)
         let boundary = "qBitX-\(UUID().uuidString)"
         var body = Data()
@@ -743,7 +747,7 @@ actor QBittorrentAPI {
         body.append(data)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         let result = try await request("torrents/add", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
-        try checkAddResult(result)
+        return try checkAddResult(result)?.added_torrent_ids?.first
     }
 
     func parseTorrentMetadata(file data: Data, filename: String) async throws -> TorrentMetadata {
@@ -774,11 +778,13 @@ actor QBittorrentAPI {
         try await request("torrents/saveMetadata", method: "POST", form: ["source": source])
     }
 
-    private func checkAddResult(_ data: Data) throws {
-        guard let result = try? JSONDecoder().decode(AddTorrentResponse.self, from: data) else { return }
+    @discardableResult
+    private func checkAddResult(_ data: Data) throws -> AddTorrentResponse? {
+        guard let result = try? JSONDecoder().decode(AddTorrentResponse.self, from: data) else { return nil }
         if result.failure_count > 0 && result.success_count == 0 && result.pending_count == 0 {
             throw APIError.server(status: 409, message: "The torrent could not be added.")
         }
+        return result
     }
 
     private func request(
@@ -1203,6 +1209,7 @@ private struct AddTorrentResponse: Decodable {
     let failure_count: Int
     let success_count: Int
     let pending_count: Int
+    let added_torrent_ids: [String]?
 }
 
 private struct APIKeyRotationResponse: Decodable {
