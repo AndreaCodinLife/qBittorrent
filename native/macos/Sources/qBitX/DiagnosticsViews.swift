@@ -73,10 +73,10 @@ private enum ExecutionLogTab: String, CaseIterable, Identifiable, Hashable {
 
 struct ExecutionLogView: View {
     private let maximumVisibleEntries = 20_000
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
     let store: TorrentStore
+    let onClose: () -> Void
     @State private var entries: [LogEntry] = []
     @State private var peerEntries: [PeerLogEntry] = []
     @State private var selectedTab = ExecutionLogTab.general
@@ -124,7 +124,7 @@ struct ExecutionLogView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 190)
-                    Button("Done") { dismiss() }
+                    Button("Hide", action: onClose)
                 }
                 HStack {
                     TextField("Filter messages…", text: $searchText)
@@ -195,7 +195,7 @@ struct ExecutionLogView: View {
                 }
             }
         }
-        .frame(width: 780, height: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: selectedTab) {
             errorMessage = nil
             while !Task.isCancelled {

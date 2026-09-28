@@ -3,6 +3,7 @@ import QBitXThemeSupport
 
 struct RSSPane: View {
     let store: TorrentStore
+    @Binding var unreadCount: Int
     @AppStorage("qBitX.themePalette") private var themePaletteJSON = ""
     @Environment(\.colorScheme) private var colorScheme
     @State private var feeds: [RSSFeed] = []
@@ -86,6 +87,7 @@ struct RSSPane: View {
                 }
                 .listStyle(.sidebar)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .frame(minWidth: 190, idealWidth: 230)
             VStack(spacing: 0) {
                 HStack {
@@ -303,6 +305,9 @@ struct RSSPane: View {
     private func reload() async {
         do {
             feeds = try await store.rssFeeds()
+            unreadCount = feeds.reduce(0) { count, feed in
+                count + feed.articles.filter { !$0.isRead }.count
+            }
             folders = try await store.rssFolders()
             if selectedFeedID == nil || !feeds.contains(where: { $0.id == selectedFeedID }) { selectedFeedID = feeds.first?.id }
             errorMessage = nil

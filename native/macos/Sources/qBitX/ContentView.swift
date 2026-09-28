@@ -10,6 +10,7 @@ private enum MainTab: String, CaseIterable, Identifiable {
     case transfers = "Transfers"
     case search = "Search"
     case rss = "RSS"
+    case executionLog = "Execution Log"
     var id: String { rawValue }
 }
 
@@ -307,6 +308,7 @@ struct ContentView: View {
     @AppStorage("qBitX.speedGraph.trackerUpload") private var showTrackerUploadGraph = true
     @AppStorage("qBitX.speedGraph.trackerDownload") private var showTrackerDownloadGraph = true
     @State private var mainTab: MainTab = .transfers
+    @State private var rssUnreadCount = 0
     @State private var detailTab: DetailTab = .general
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
     @State private var showsURLSheet = false
@@ -328,7 +330,9 @@ struct ContentView: View {
     @State private var showsBackendPreferences = false
     @State private var showsSpeedLimits = false
     @State private var showsStatistics = false
-    @State private var showsExecutionLog = false
+    @AppStorage("qBitX.showSearchTab") private var showSearchTab = true
+    @AppStorage("qBitX.showRSSTab") private var showRSSTab = true
+    @AppStorage("qBitX.showExecutionLog") private var showExecutionLogTab = false
     @State private var showsTorrentCreator = false
     @State private var showsCookies = false
     @State private var torrentOptionsTarget: TorrentOptionsTarget?
@@ -578,11 +582,13 @@ struct ContentView: View {
                 Divider()
                 ZStack {
                     if store.hasCompletedInitialConnection {
-                        SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .opacity(mainTab == .search ? 1 : 0)
-                            .allowsHitTesting(mainTab == .search)
-                            .accessibilityHidden(mainTab != .search)
+                        if showSearchTab {
+                            SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .opacity(mainTab == .search ? 1 : 0)
+                                .allowsHitTesting(mainTab == .search)
+                                .accessibilityHidden(mainTab != .search)
+                        }
 
                         if mainTab == .transfers {
                             if showDetailPane {
@@ -594,8 +600,15 @@ struct ContentView: View {
                                 torrentTable
                             }
                         }
-                        if mainTab == .rss {
-                            RSSPane(store: store)
+                        if showRSSTab {
+                            RSSPane(store: store, unreadCount: $rssUnreadCount)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .opacity(mainTab == .rss ? 1 : 0)
+                                .allowsHitTesting(mainTab == .rss)
+                                .accessibilityHidden(mainTab != .rss)
+                        }
+                        if mainTab == .executionLog {
+                            ExecutionLogView(store: store, onClose: hideExecutionLogTab)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     } else if !showSplashOnStartup {
@@ -724,7 +737,6 @@ struct ContentView: View {
         .sheet(isPresented: $showsBackendPreferences) { BackendPreferencesView(store: store) }
         .sheet(isPresented: $showsSpeedLimits) { SpeedLimitsView(store: store) }
         .sheet(isPresented: $showsStatistics) { StatisticsView(store: store) }
-        .sheet(isPresented: $showsExecutionLog) { ExecutionLogView(store: store) }
         .sheet(isPresented: $showsTorrentCreator) { TorrentCreatorView(store: store) }
         .sheet(isPresented: $showsCookies) { CookiesView(store: store) }
         .sheet(item: $torrentOptionsTarget) { target in TorrentOptionsView(store: store, hashes: target.hashes) }
@@ -870,11 +882,11 @@ struct ContentView: View {
             showPreferences: { showsBackendPreferences = true },
             showStatistics: { showsStatistics = true },
             showSpeedLimits: { showsSpeedLimits = true },
-            focusTorrentFilter: { mainTab = .transfers; torrentFilterFocused = true },
-            selectTransfers: { mainTab = .transfers },
-            selectSearch: { mainTab = .search },
-            selectRSS: { mainTab = .rss },
-            showExecutionLog: { showsExecutionLog = true },
+            focusTorrentFilter: { selectMainTab(.transfers); torrentFilterFocused = true },
+            selectTransfers: { selectMainTab(.transfers) },
+            selectSearch: { selectMainTab(.search) },
+            selectRSS: { selectMainTab(.rss) },
+            showExecutionLog: { openExecutionLog() },
             openDocumentation: { openURL("https://www.qbittorrent.org/documentation") },
             checkForUpdates: { Task { await programUpdateChecker.check(manual: true) } },
             donate: { openURL("https://www.qbittorrent.org/donate") },
@@ -1170,6 +1182,9 @@ struct ContentView: View {
             Toggle("Show Status Bar", isOn: $showStatusBar)
             Toggle("Show Toolbar", isOn: $showToolbar)
             Toggle("Show Speed in Window Title", isOn: $showSpeedInTitleBar)
+            Toggle("Search Engine", isOn: mainTabVisibilityBinding(.search))
+            Toggle("RSS Reader", isOn: mainTabVisibilityBinding(.rss))
+            Toggle("Execution Log", isOn: mainTabVisibilityBinding(.executionLog))
             Toggle("Show Tracker Status Filters", isOn: $showTrackerStatusFilter)
             Toggle("Separate Tracker Status Filters", isOn: $separateTrackerStatusFilter)
             Toggle("Hide Empty Status Filters", isOn: $hideZeroStatusFilters)
@@ -1184,7 +1199,6 @@ struct ContentView: View {
             Toggle("Show Speed in Menu Bar", isOn: $showSpeedInMenuBar)
             Toggle("Show Speed in Dock", isOn: $showSpeedInDock)
             Divider()
-            Button("Execution Log…") { showsExecutionLog = true }
             Button("Statistics…") { showsStatistics = true }
         } label: { toolbarLabel("View", image: "rectangle.split.3x1") }
     }
@@ -1209,7 +1223,7 @@ struct ContentView: View {
             Button("Create Torrent…") { showsTorrentCreator = true }.disabled(!store.usesBundledBackend)
             Button("Cookies…") { showsCookies = true }
             Button("Statistics…") { showsStatistics = true }
-            Button("Execution Log…") { showsExecutionLog = true }
+            Button("Execution Log") { openExecutionLog() }
             Menu("Power Management") {
                 Toggle("Keep This Mac Awake While Downloading", isOn: $preventSleepWhenDownloading)
                 Toggle("Keep This Mac Awake While Seeding", isOn: $preventSleepWhenSeeding)
@@ -1477,18 +1491,69 @@ struct ContentView: View {
         .padding(.horizontal, 8)
     }
 
+    private var visibleMainTabs: [MainTab] {
+        MainTab.allCases.filter(isMainTabVisible)
+    }
+
+    private func isMainTabVisible(_ tab: MainTab) -> Bool {
+        return switch tab {
+        case .transfers: true
+        case .search: showSearchTab
+        case .rss: showRSSTab
+        case .executionLog: showExecutionLogTab
+        }
+    }
+
+    private func mainTabVisibilityBinding(_ tab: MainTab) -> Binding<Bool> {
+        Binding(
+            get: { isMainTabVisible(tab) },
+            set: { setMainTabVisible(tab, isVisible: $0) }
+        )
+    }
+
+    private func setMainTabVisible(_ tab: MainTab, isVisible: Bool) {
+        switch tab {
+        case .transfers:
+            return
+        case .search:
+            showSearchTab = isVisible
+        case .rss:
+            showRSSTab = isVisible
+        case .executionLog:
+            showExecutionLogTab = isVisible
+        }
+        if !isVisible, mainTab == tab { mainTab = .transfers }
+    }
+
+    private func selectMainTab(_ tab: MainTab) {
+        setMainTabVisible(tab, isVisible: true)
+        mainTab = tab
+    }
+
+    private func openExecutionLog() {
+        selectMainTab(.executionLog)
+    }
+
+    private func hideExecutionLogTab() {
+        setMainTabVisible(.executionLog, isVisible: false)
+    }
+
     private var mainTabs: some View {
         HStack(spacing: 6) {
             GlassEffectContainer(spacing: 6) {
                 HStack(spacing: 6) {
-                    ForEach(MainTab.allCases) { tab in
-                        Button { mainTab = tab } label: {
+                    ForEach(visibleMainTabs) { tab in
+                        Button {
+                            selectMainTab(tab)
+                        } label: {
                             Group {
                                 if tab == .transfers {
                                     HStack(spacing: 0) {
                                         Text("Transfers")
                                         Text(" (\(torrents.count))")
                                     }
+                                } else if tab == .rss {
+                                    Text("RSS (\(rssUnreadCount))")
                                 } else {
                                     Text(LocalizedStringKey(tab.rawValue))
                                 }
