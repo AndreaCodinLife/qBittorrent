@@ -493,7 +493,13 @@ struct ContentView: View {
         .sheet(isPresented: $showsAbout) { AboutView(serverVersion: store.serverVersion) }
         .sheet(isPresented: $showsFileAssociations) { FileAssociationView() }
         .sheet(item: $textAction) { action in
-            ValueSheet(title: action.title, hint: action.hint, initialValue: initialValue(for: action), allowsEmpty: action == .category || action == .tags) { value in
+            ValueSheet(
+                title: action.title,
+                hint: action.hint,
+                initialValue: initialValue(for: action),
+                allowsEmpty: action == .category || action == .tags,
+                pathStore: action == .location ? store : nil
+            ) { value in
                 try await applyTextAction(action, value: value)
             }
         }
@@ -2867,15 +2873,17 @@ private struct ValueSheet: View {
     let title: String
     let hint: String
     let allowsEmpty: Bool
+    let pathStore: TorrentStore?
     let onApply: (String) async throws -> Void
     @State private var value: String
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    init(title: String, hint: String, initialValue: String, allowsEmpty: Bool = false, onApply: @escaping (String) async throws -> Void) {
+    init(title: String, hint: String, initialValue: String, allowsEmpty: Bool = false, pathStore: TorrentStore? = nil, onApply: @escaping (String) async throws -> Void) {
         self.title = title
         self.hint = hint
         self.allowsEmpty = allowsEmpty
+        self.pathStore = pathStore
         self.onApply = onApply
         _value = State(initialValue: initialValue)
     }
@@ -2883,7 +2891,12 @@ private struct ValueSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.title2.weight(.semibold))
-            TextField(hint, text: $value).textFieldStyle(.roundedBorder)
+            HStack {
+                TextField(hint, text: $value).textFieldStyle(.roundedBorder)
+                if let pathStore {
+                    ServerPathBrowserButton(store: pathStore, path: $value, kind: .directory)
+                }
+            }
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
             HStack {
                 Spacer()
@@ -2995,6 +3008,7 @@ struct AddTorrentSheet: View {
     @State private var isAdding = false
     @State private var isLoadingDefaults = true
     @State private var serverDefaultAddOptions = TorrentAddOptions()
+    @State private var serverFreeSpace: Int64?
     @State private var didAddTorrent = false
 
     init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, showOptions: Bool = true, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Void) {
@@ -3025,6 +3039,9 @@ struct AddTorrentSheet: View {
     }
     private var savePathHistory: [String] {
         currentPathProfile.savePathHistory
+    }
+    private var currentFreeSpace: Int64? {
+        store.usesBundledBackend ? availableDiskSpace(for: savePath) : serverFreeSpace
     }
     private var incompletePathHistory: [String] {
         currentPathProfile.incompletePathHistory
@@ -3086,13 +3103,8 @@ struct AddTorrentSheet: View {
                                 }
                                 .help("Recent save locations")
                             }
-                            Button {
-                                chooseDirectory(currentPath: savePath) { savePath = $0 }
-                            } label: {
-                                Image(systemName: "folder")
-                            }
-                            .disabled(automaticManagement || !store.usesBundledBackend)
-                            .help(store.usesBundledBackend ? "Choose save location" : "Remote server paths must be entered as server paths.")
+                            ServerPathBrowserButton(store: store, path: $savePath, kind: .directory)
+                                .disabled(automaticManagement)
                         }
                         Toggle("Use another path for incomplete torrents", isOn: $downloadPathEnabled)
                             .disabled(automaticManagement)
@@ -3110,13 +3122,8 @@ struct AddTorrentSheet: View {
                                     }
                                     .help("Recent incomplete save locations")
                                 }
-                                Button {
-                                    chooseDirectory(currentPath: downloadPath) { downloadPath = $0 }
-                                } label: {
-                                    Image(systemName: "folder")
-                                }
-                                .disabled(automaticManagement || !store.usesBundledBackend)
-                                .help(store.usesBundledBackend ? "Choose incomplete save location" : "Remote server paths must be entered as server paths.")
+                                ServerPathBrowserButton(store: store, path: $downloadPath, kind: .directory)
+                                    .disabled(automaticManagement)
                             }
                         }
                         Toggle("Remember last used save location", isOn: $rememberLastSavePath)
@@ -3166,7 +3173,7 @@ struct AddTorrentSheet: View {
                             }
                             Text("Selected size: \(ByteCountFormatter.string(fromByteCount: selectedFilesSize, countStyle: .file))")
                                 .font(.caption.weight(.medium))
-                            if let freeSpace = availableDiskSpace(for: savePath) {
+                            if let freeSpace = currentFreeSpace {
                                 Text("Free space: \(ByteCountFormatter.string(fromByteCount: freeSpace, countStyle: .file))")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -3341,6 +3348,7 @@ struct AddTorrentSheet: View {
             await loadServerDefaults()
             if showOptions && (file != nil || !initialURL.isEmpty) { await loadMetadata() }
         }
+        .task(id: savePath) { await refreshServerFreeSpace(at: savePath) }
     }
 
     private var isReadyToAdd: Bool {
@@ -3393,16 +3401,6 @@ struct AddTorrentSheet: View {
         }
     }
 
-    private func chooseDirectory(currentPath: String, setPath: (String) -> Void) {
-        guard store.usesBundledBackend else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = currentPath.isEmpty ? nil : URL(fileURLWithPath: currentPath, isDirectory: true)
-        if panel.runModal() == .OK, let url = panel.url { setPath(url.path) }
-    }
-
     private func availableDiskSpace(for path: String) -> Int64? {
         guard store.usesBundledBackend, !path.isEmpty else { return nil }
         var current = URL(fileURLWithPath: path, isDirectory: true)
@@ -3414,6 +3412,20 @@ struct AddTorrentSheet: View {
             let parent = current.deletingLastPathComponent()
             guard parent.path != current.path else { return nil }
             current = parent
+        }
+    }
+
+    private func refreshServerFreeSpace(at path: String) async {
+        guard !store.usesBundledBackend, !path.isEmpty else {
+            serverFreeSpace = nil
+            return
+        }
+        do {
+            try await Task.sleep(for: .milliseconds(350))
+            serverFreeSpace = try await store.freeSpace(at: path)
+        } catch is CancellationError {
+        } catch {
+            serverFreeSpace = nil
         }
     }
 

@@ -91,9 +91,17 @@ struct OrganizationView: View {
                         Section("Category") {
                             TextField("Category name (use / for subcategories)", text: $categoryName)
                                 .disabled(!isCreatingCategory && selectedCategory != nil)
-                            TextField("Save path", text: $savePath)
+                            HStack {
+                                TextField("Save path", text: $savePath)
+                                ServerPathBrowserButton(store: store, path: $savePath, kind: .directory)
+                            }
                             Toggle("Use a separate path for completed torrents", isOn: $downloadPathEnabled)
-                            if downloadPathEnabled { TextField("Completed path", text: $downloadPath) }
+                            if downloadPathEnabled {
+                                HStack {
+                                    TextField("Completed path", text: $downloadPath)
+                                    ServerPathBrowserButton(store: store, path: $downloadPath, kind: .directory)
+                                }
+                            }
                         }
                         Section("Share limits") {
                             TextField("Ratio (-2 = default, -1 = unlimited)", text: $ratioLimit)

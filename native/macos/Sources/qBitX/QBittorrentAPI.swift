@@ -34,6 +34,15 @@ struct NetworkInterfaceOption: Decodable, Sendable {
     let value: String
 }
 
+struct ServerDirectoryEntry: Decodable, Identifiable, Sendable {
+    let name: String
+    let type: String
+    let size: Int64?
+
+    var id: String { name }
+    var isDirectory: Bool { type == "dir" }
+}
+
 struct TorrentAddOptions: Sendable {
     var savePath = ""
     var downloadPathEnabled = false
@@ -171,6 +180,29 @@ actor QBittorrentAPI {
 
     func preferencesData() async throws -> Data {
         try await request("app/preferences")
+    }
+
+    func defaultSavePath() async throws -> String {
+        let data = try await request("app/defaultSavePath")
+        guard let path = String(data: data, encoding: .utf8) else { throw APIError.badResponse }
+        return path.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func directoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
+        let data = try await request("app/getDirectoryContent", query: [
+            "dirPath": path,
+            "mode": mode,
+            "withMetadata": "true"
+        ])
+        return try JSONDecoder().decode([ServerDirectoryEntry].self, from: data)
+    }
+
+    func freeSpace(at path: String) async throws -> Int64? {
+        let data = try await request("app/getFreeSpaceAtPath", query: ["path": path])
+        guard let response = String(data: data, encoding: .utf8), let value = Int64(response.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw APIError.badResponse
+        }
+        return value >= 0 ? value : nil
     }
 
     func networkInterfaces() async throws -> [NetworkInterfaceOption] {

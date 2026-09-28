@@ -115,7 +115,10 @@ struct RSSRulesView: View {
                         Section("When a match is found") {
                             TextField("Category", text: $category)
                             TextField("Tags (comma separated)", text: $tags)
-                            TextField("Save in folder (blank uses category/default)", text: $savePath)
+                            HStack {
+                                TextField("Save in folder (blank uses category/default)", text: $savePath)
+                                ServerPathBrowserButton(store: store, path: $savePath, kind: .directory)
+                            }
                             Picker("Add paused", selection: $addPaused) {
                                 Text("Use qBittorrent default").tag("Default")
                                 Text("Always paused").tag("Always")

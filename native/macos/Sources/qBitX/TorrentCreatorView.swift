@@ -27,11 +27,11 @@ struct TorrentCreatorView: View {
             Form {
                 HStack {
                     TextField("Source file or folder", text: $sourcePath)
-                    Button("Choose…", action: chooseSource)
+                    ServerPathBrowserButton(store: store, path: $sourcePath, kind: .fileOrDirectory, label: store.usesBundledBackend ? "Choose…" : "Browse…")
                 }
                 HStack {
                     TextField("Save .torrent as", text: $outputPath)
-                    Button("Choose…", action: chooseOutput)
+                    ServerPathBrowserButton(store: store, path: $outputPath, kind: .saveFile, label: store.usesBundledBackend ? "Choose…" : "Browse…")
                 }
                 Picker("Format", selection: $format) {
                     Text("Hybrid (v1 + v2)").tag("hybrid")
@@ -69,7 +69,7 @@ struct TorrentCreatorView: View {
             List(tasks) { task in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(task.sourcePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? task.taskID)
+                        Text(task.sourcePath.map(lastPathComponent) ?? task.taskID)
                             .lineLimit(1)
                         Text(task.status).font(.caption).foregroundStyle(task.status == "Failed" ? .red : .secondary)
                     }
@@ -108,6 +108,10 @@ struct TorrentCreatorView: View {
         }
         .padding(22)
         .frame(width: 720, height: 770)
+        .onChange(of: sourcePath) { _, newPath in
+            guard outputPath.isEmpty, !newPath.isEmpty else { return }
+            outputPath = defaultOutputPath(for: newPath)
+        }
         .task {
             while !Task.isCancelled {
                 await loadTasks()
@@ -116,22 +120,26 @@ struct TorrentCreatorView: View {
         }
     }
 
-    private func chooseSource() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            sourcePath = url.path
-            if outputPath.isEmpty { outputPath = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".torrent").path }
+    private func defaultOutputPath(for sourcePath: String) -> String {
+        let separator: Character = sourcePath.contains("\\") && !sourcePath.contains("/") ? "\\" : "/"
+        var normalized = sourcePath
+        while normalized.count > 1, let last = normalized.last, last == "/" || last == "\\" {
+            if normalized.count == 3, normalized[normalized.index(normalized.startIndex, offsetBy: 1)] == ":" { break }
+            normalized.removeLast()
         }
+        if normalized.count == 3, normalized[normalized.index(normalized.startIndex, offsetBy: 1)] == ":" {
+            return normalized + "new.torrent"
+        }
+        let name = normalized.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? "new"
+        let lastSeparator = normalized.lastIndex(where: { $0 == "/" || $0 == "\\" })
+        guard let lastSeparator else { return name + ".torrent" }
+        let parent = String(normalized[..<lastSeparator])
+        if parent.isEmpty { return String(separator) + name + ".torrent" }
+        return parent + String(separator) + name + ".torrent"
     }
 
-    private func chooseOutput() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "torrent") ?? .data]
-        panel.nameFieldStringValue = sourcePath.isEmpty ? "new.torrent" : URL(fileURLWithPath: sourcePath).lastPathComponent + ".torrent"
-        if panel.runModal() == .OK, let url = panel.url { outputPath = url.path }
+    private func lastPathComponent(_ path: String) -> String {
+        path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
     }
 
     private func create() {

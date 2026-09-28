@@ -117,6 +117,21 @@ final class TorrentStore {
         return try await api.preferencesData()
     }
 
+    func defaultSavePath() async throws -> String {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.defaultSavePath()
+    }
+
+    func serverDirectoryContent(path: String, mode: String) async throws -> [ServerDirectoryEntry] {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.directoryContent(path: path, mode: mode)
+    }
+
+    func freeSpace(at path: String) async throws -> Int64? {
+        guard let api else { throw TorrentStoreError.disconnected }
+        return try await api.freeSpace(at: path)
+    }
+
     func shouldConfirmTorrentRecheck() async throws -> Bool {
         let data = try await preferencesData()
         guard let preferences = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
