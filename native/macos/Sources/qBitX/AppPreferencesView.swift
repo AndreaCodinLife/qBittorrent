@@ -27,8 +27,14 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
     @AppStorage("qBitX.confirmOnExit") private var confirmOnExit = true
     @AppStorage("qBitX.confirmAutoCompletionAction") private var confirmAutoCompletionAction = true
+    @AppStorage("qBitX.systemNotificationsEnabled") private var systemNotificationsEnabled = true
+    @AppStorage("qBitX.notifyTorrentAdded") private var notifyOnTorrentAdded = false
+    @AppStorage("qBitX.notifyDownloadComplete") private var notifyOnDownloadComplete = true
+    @AppStorage("qBitX.notifyTorrentError") private var notifyOnTorrentError = true
+    @AppStorage("qBitX.notifySearchComplete") private var notifyOnSearchComplete = true
     @AppStorage("qBitX.startMinimized") private var startMinimized = false
     @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
+    @AppStorage("qBitX.recursiveDownloadEnabled") private var recursiveDownloadEnabled = true
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
     @AppStorage("qBitX.hideZeroValuesMode") private var hideZeroValuesMode = "always"
     @AppStorage("qBitX.alternatingTransferRows") private var alternatingTransferRows = true
@@ -36,6 +42,7 @@ struct AppPreferencesView: View {
     @AppStorage("qBitX.progressBarFollowsStateColor") private var progressBarFollowsStateColor = false
     @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
+    @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
 
     let store: TorrentStore
 
@@ -67,6 +74,13 @@ struct AppPreferencesView: View {
                         .disabled(!colorTransfersByState)
                 }
 
+                Section("When Adding Torrents") {
+                    Toggle("Show torrent addition options", isOn: $showTorrentAdditionDialog)
+                    Text("When off, new torrents use the connected qBittorrent server’s default add settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Torrent Content") {
                     Toggle("Drag downloaded files from the Content tab", isOn: $dragContentFiles)
                         .disabled(!store.usesBundledBackend)
@@ -75,6 +89,35 @@ struct AppPreferencesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                Section("Completed Downloads") {
+                    Toggle("Ask before adding .torrent files found inside completed downloads", isOn: $recursiveDownloadEnabled)
+                        .disabled(!store.usesBundledBackend)
+                    if store.usesBundledBackend {
+                        Text("When a download finishes, qBitX checks its files and offers to add any .torrent files to the same folder.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Remote server files are not available for local inspection.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Notifications") {
+                    Toggle("Enable macOS notifications", isOn: $systemNotificationsEnabled)
+                    Toggle("When a torrent is added", isOn: $notifyOnTorrentAdded)
+                        .disabled(!systemNotificationsEnabled)
+                    Toggle("When a download finishes", isOn: $notifyOnDownloadComplete)
+                        .disabled(!systemNotificationsEnabled)
+                    Toggle("When a torrent has an error", isOn: $notifyOnTorrentError)
+                        .disabled(!systemNotificationsEnabled)
+                    Toggle("When a background search finishes", isOn: $notifyOnSearchComplete)
+                        .disabled(!systemNotificationsEnabled)
+                    Text("macOS asks for notification permission when qBitX first sends a notification.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Status Bar") {
@@ -101,5 +144,9 @@ struct AppPreferencesView: View {
             }
         }
         .frame(minWidth: 650, minHeight: 430)
+        .onChange(of: systemNotificationsEnabled) { _, enabled in
+            guard enabled else { return }
+            Task { _ = await MacOSNotifications.requestAuthorization() }
+        }
     }
 }

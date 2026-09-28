@@ -48,7 +48,11 @@ private enum SearchNameFilterMode: String, CaseIterable, Identifiable {
 
 struct SearchPane: View {
     let store: TorrentStore
+    @Binding var isSearchTabVisible: Bool
+    @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.searchHistoryJSON") private var searchHistoryJSON = "[]"
+    @AppStorage("qBitX.systemNotificationsEnabled") private var systemNotificationsEnabled = true
+    @AppStorage("qBitX.notifySearchComplete") private var notifyOnSearchComplete = true
     @State private var query = ""
     @State private var searchTabs: [SearchResultTab] = []
     @State private var selectedSearchTabID: Int?
@@ -377,7 +381,17 @@ struct SearchPane: View {
                 try Task.checkCancellation()
                 let response = try await store.searchResults(id)
                 updateSearchTab(id, response: response)
-                if response.status != "Running" { return }
+                if response.status != "Running" {
+                    if response.status != "Stopped", !isSearchTabVisible, systemNotificationsEnabled, notifyOnSearchComplete {
+                        let failed = response.status.localizedCaseInsensitiveContains("error")
+                            || response.status.localizedCaseInsensitiveContains("fail")
+                        MacOSNotifications.post(
+                            title: "Search Engine",
+                            body: failed ? "Search has failed." : "Search has finished."
+                        )
+                    }
+                    return
+                }
                 try await Task.sleep(for: .seconds(1))
             }
         } catch is CancellationError {
@@ -385,6 +399,9 @@ struct SearchPane: View {
         } catch {
             if let index = searchTabs.firstIndex(where: { $0.id == id }) { searchTabs[index].status = "Error" }
             errorMessage = error.localizedDescription
+            if !isSearchTabVisible, systemNotificationsEnabled, notifyOnSearchComplete {
+                MacOSNotifications.post(title: "Search Engine", body: "Search has failed.")
+            }
         }
     }
 
@@ -445,6 +462,10 @@ struct SearchPane: View {
 
     private func downloadSearchResults(_ results: [SearchResult]) {
         guard !results.isEmpty else { return }
+        if showTorrentAdditionDialog {
+            openDownloadWindows(results)
+            return
+        }
         Task {
             for result in results {
                 do { try await store.downloadSearchResult(result) }

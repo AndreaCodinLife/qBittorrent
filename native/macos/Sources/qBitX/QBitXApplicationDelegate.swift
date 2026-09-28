@@ -1,8 +1,14 @@
 import AppKit
+import UserNotifications
 
 @MainActor
 final class QBitXApplicationDelegate: NSObject, NSApplicationDelegate {
     static weak var store: TorrentStore?
+    private let notificationDelegate = QBitXNotificationDelegate()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MacOSNotifications.setDelegate(notificationDelegate)
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let shouldConfirm = UserDefaults.standard.object(forKey: "qBitX.confirmOnExit") as? Bool ?? true

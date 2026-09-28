@@ -79,6 +79,28 @@ private enum TorrentDisplayValues {
     static let infinityLabels = ["unlimited", "infinity", "∞"]
 }
 
+private struct TorrentCompletionState: Equatable {
+    let isComplete: Bool
+    let rawState: String
+}
+
+private struct TorrentCompletionSnapshot: Equatable {
+    let stateByID: [String: TorrentCompletionState]
+
+    init(_ torrents: [Torrent]) {
+        stateByID = Dictionary(uniqueKeysWithValues: torrents.map {
+            ($0.id, TorrentCompletionState(isComplete: $0.progress >= 1, rawState: $0.rawState))
+        })
+    }
+}
+
+private struct RecursiveTorrentCandidate: Identifiable {
+    let relativePath: String
+    let savePath: String
+    var id: String { "\(savePath)|\(relativePath)" }
+    var filename: String { URL(fileURLWithPath: relativePath).lastPathComponent }
+}
+
 struct ContentView: View {
     @Bindable var store: TorrentStore
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
@@ -92,6 +114,7 @@ struct ContentView: View {
     @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
     @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
     @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
+    @AppStorage("qBitX.showTorrentAdditionDialog") private var showTorrentAdditionDialog = true
     @AppStorage("qBitX.doubleClick.downloading") private var downloadingDoubleClickAction = TorrentDoubleClickAction.toggleStop.rawValue
     @AppStorage("qBitX.doubleClick.completed") private var completedDoubleClickAction = TorrentDoubleClickAction.openDestination.rawValue
     @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
@@ -109,6 +132,11 @@ struct ContentView: View {
     @AppStorage("qBitX.hideZeroStatusFilters") private var hideZeroStatusFilters = false
     @AppStorage("qBitX.interfaceLocked") private var interfaceLocked = false
     @AppStorage("qBitX.downloadCompletionAction") private var downloadCompletionAction = "none"
+    @AppStorage("qBitX.recursiveDownloadEnabled") private var recursiveDownloadEnabled = true
+    @AppStorage("qBitX.systemNotificationsEnabled") private var systemNotificationsEnabled = true
+    @AppStorage("qBitX.notifyTorrentAdded") private var notifyOnTorrentAdded = false
+    @AppStorage("qBitX.notifyDownloadComplete") private var notifyOnDownloadComplete = true
+    @AppStorage("qBitX.notifyTorrentError") private var notifyOnTorrentError = true
     @State private var selectedTorrentIDs: Set<String> = []
     @SceneStorage("qBitX.transferColumns") private var columnCustomization = TableColumnCustomization<Torrent>()
     @State private var textAction: TorrentTextAction?
@@ -139,6 +167,8 @@ struct ContentView: View {
     @State private var showsURLSheet = false
     @State private var incomingTorrentURL: String?
     @State private var pendingExternalURLs: [URL] = []
+    @State private var pendingExternalFiles: [PendingTorrentFile] = []
+    @State private var isAddingExternalTorrent = false
     @State private var showsFileImporter = false
     @State private var pendingTorrentFile: PendingTorrentFile?
     @State private var showsRemoveConfirmation = false
@@ -159,8 +189,12 @@ struct ContentView: View {
     @State private var showsFileAssociations = false
     @State private var previewTorrent: Torrent?
     @State private var authenticationError: String?
-    @State private var incompleteDownloadIDs: Set<String> = []
+    @State private var hasObservedTorrentCompletionSnapshot = false
     @State private var showsDownloadCompletionAction = false
+    @State private var showsRecursiveTorrentConfirmation = false
+    @State private var recursiveTorrentCandidates: [RecursiveTorrentCandidate] = []
+    @State private var recursiveTorrentSourceNames: [String] = []
+    @State private var inspectedRecursiveTorrentIDs: Set<String> = []
     @State private var actionError: String?
     @State private var retryID = 0
     @State private var properties: TorrentProperties?
@@ -175,6 +209,7 @@ struct ContentView: View {
     @State private var selectedFileIDs: Set<Int> = []
 
     private var torrents: [Torrent] { store.torrents }
+    private var torrentCompletionSnapshot: TorrentCompletionSnapshot { TorrentCompletionSnapshot(torrents) }
 
     private var visibleTorrents: [Torrent] {
         torrents.filter { torrent in
@@ -315,7 +350,7 @@ struct ContentView: View {
                         torrentTable
                     }
                 case .search:
-                    SearchPane(store: store)
+                    SearchPane(store: store, isSearchTabVisible: Binding(get: { mainTab == .search }, set: { _ in }))
                 case .rss:
                     RSSPane(store: store)
                 }
@@ -323,6 +358,20 @@ struct ContentView: View {
                     Divider()
                     statusBar
                 }
+            }
+            .confirmationDialog("Recursive download confirmation", isPresented: $showsRecursiveTorrentConfirmation, titleVisibility: .visible) {
+                Button("Add Torrent Files (\(recursiveTorrentCandidates.count))") {
+                    addRecursiveTorrentCandidates()
+                }
+                Button("Never") {
+                    recursiveDownloadEnabled = false
+                    discardRecursiveTorrentCandidates()
+                }
+                Button("No", role: .cancel) {
+                    discardRecursiveTorrentCandidates()
+                }
+            } message: {
+                Text(recursiveTorrentConfirmationMessage)
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
@@ -335,7 +384,9 @@ struct ContentView: View {
             selectedTorrentIDs.formIntersection(ids)
             if selectedTorrentIDs.isEmpty, let first = ids.first { selectedTorrentIDs = [first] }
         }
-        .onChange(of: torrents.map(\.progress)) { _, _ in checkDownloadCompletion() }
+        .onChange(of: torrentCompletionSnapshot) { previous, current in
+            observeTorrentCompletions(from: previous, to: current)
+        }
         .onChange(of: showsOrganization) { wasPresented, isPresented in
             if wasPresented && !isPresented { Task { await loadFilterCatalogs() } }
         }
@@ -397,12 +448,12 @@ struct ContentView: View {
             incomingTorrentURL = nil
             presentNextExternalURLIfReady()
         }) {
-            AddTorrentSheet(file: nil, store: store, initialURL: incomingTorrentURL ?? "") { url, downloader, options in
+            AddTorrentSheet(file: nil, store: store, initialURL: incomingTorrentURL ?? "", showOptions: showTorrentAdditionDialog) { url, downloader, options in
                 try await store.add(url: url, downloader: downloader, options: options)
             }
         }
         .sheet(item: $pendingTorrentFile, onDismiss: presentNextExternalURLIfReady) { file in
-            AddTorrentSheet(file: file, store: store) { source, _, options in
+            AddTorrentSheet(file: file, store: store, showOptions: showTorrentAdditionDialog) { source, _, options in
                 if source.hasPrefix("magnet:") {
                     try await store.add(url: source, options: options)
                 } else {
@@ -445,7 +496,13 @@ struct ContentView: View {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
-                pendingTorrentFile = PendingTorrentFile(name: url.lastPathComponent, data: data)
+                let file = PendingTorrentFile(name: url.lastPathComponent, data: data)
+                if showTorrentAdditionDialog {
+                    pendingTorrentFile = file
+                } else {
+                    pendingExternalFiles.append(file)
+                    presentNextExternalURLIfReady()
+                }
             } catch { actionError = error.localizedDescription }
         }
         .confirmationDialog("Remove selected torrents?", isPresented: $showsRemoveConfirmation) {
@@ -619,14 +676,28 @@ struct ContentView: View {
     }
 
     private func presentNextExternalURLIfReady() {
-        guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet else { return }
+        guard store.isConnected, pendingTorrentFile == nil, !showsURLSheet, !isAddingExternalTorrent else { return }
+        if !pendingExternalFiles.isEmpty {
+            let file = pendingExternalFiles.removeFirst()
+            if showTorrentAdditionDialog {
+                pendingTorrentFile = file
+            } else {
+                addExternalTorrent(file: file)
+            }
+            return
+        }
         while !pendingExternalURLs.isEmpty {
             let url = pendingExternalURLs.removeFirst()
             if url.isFileURL {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    pendingTorrentFile = PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url))
+                    let file = PendingTorrentFile(name: url.lastPathComponent, data: try Data(contentsOf: url))
+                    if showTorrentAdditionDialog {
+                        pendingTorrentFile = file
+                    } else {
+                        addExternalTorrent(file: file)
+                    }
                     return
                 } catch {
                     actionError = error.localizedDescription
@@ -634,9 +705,47 @@ struct ContentView: View {
                 }
             }
 
-            incomingTorrentURL = url.absoluteString
-            showsURLSheet = true
+            if showTorrentAdditionDialog {
+                incomingTorrentURL = url.absoluteString
+                showsURLSheet = true
+            } else {
+                addExternalTorrent(url: url.absoluteString)
+            }
             return
+        }
+    }
+
+    private func defaultTorrentAddOptions() async throws -> TorrentAddOptions {
+        var options = try await store.defaultTorrentAddOptions()
+        if options.category.isEmpty {
+            options.category = UserDefaults.standard.string(forKey: "qBitX.addTorrentDefaultCategory") ?? ""
+        }
+        return options
+    }
+
+    private func addExternalTorrent(file: PendingTorrentFile) {
+        guard !isAddingExternalTorrent else { return }
+        isAddingExternalTorrent = true
+        Task {
+            do {
+                let options = try await defaultTorrentAddOptions()
+                try await store.add(file: file.data, filename: file.name, options: options)
+            } catch { actionError = error.localizedDescription }
+            isAddingExternalTorrent = false
+            presentNextExternalURLIfReady()
+        }
+    }
+
+    private func addExternalTorrent(url: String) {
+        guard !isAddingExternalTorrent else { return }
+        isAddingExternalTorrent = true
+        Task {
+            do {
+                let options = try await defaultTorrentAddOptions()
+                try await store.add(url: url, options: options)
+            } catch { actionError = error.localizedDescription }
+            isAddingExternalTorrent = false
+            presentNextExternalURLIfReady()
         }
     }
 
@@ -646,20 +755,8 @@ struct ContentView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && (isTorrentLink($0) || localTorrentURL($0) != nil) }
         guard !links.isEmpty else { return }
-        Task {
-            for link in links {
-                do {
-                    if let fileURL = localTorrentURL(link) {
-                        let access = fileURL.startAccessingSecurityScopedResource()
-                        defer { if access { fileURL.stopAccessingSecurityScopedResource() } }
-                        try await store.add(file: Data(contentsOf: fileURL), filename: fileURL.lastPathComponent)
-                    } else {
-                        try await store.add(url: link)
-                    }
-                }
-                catch { actionError = error.localizedDescription; return }
-            }
-        }
+        pendingExternalURLs.append(contentsOf: links.compactMap { localTorrentURL($0) ?? URL(string: $0) })
+        presentNextExternalURLIfReady()
     }
 
     private func localTorrentURL(_ value: String) -> URL? {
@@ -2011,26 +2108,166 @@ struct ContentView: View {
         }
     }
 
-    private func checkDownloadCompletion() {
-        let currentTorrents = Set(torrents.map(\.id))
-        let currentIncomplete = Set(torrents.filter { $0.progress < 1 }.map(\.id))
-        guard !currentTorrents.isEmpty else {
-            incompleteDownloadIDs = []
+    private func observeTorrentCompletions(from previous: TorrentCompletionSnapshot, to current: TorrentCompletionSnapshot) {
+        guard hasObservedTorrentCompletionSnapshot else {
+            hasObservedTorrentCompletionSnapshot = true
             return
         }
-        if !currentIncomplete.isEmpty {
-            incompleteDownloadIDs = currentIncomplete
-        } else if !incompleteDownloadIDs.isEmpty {
-            let completedExistingTorrents = incompleteDownloadIDs.isSubset(of: currentTorrents)
-            incompleteDownloadIDs = []
-            if completedExistingTorrents, downloadCompletionAction != "none" {
-                if confirmAutoCompletionAction {
-                    showsDownloadCompletionAction = true
-                } else {
-                    performDownloadCompletionAction()
-                }
+
+        let newlyAddedIDs = Set(current.stateByID.keys).subtracting(previous.stateByID.keys)
+        let newlyCompletedIDs = Set(current.stateByID.compactMap { entry in
+            previous.stateByID[entry.key]?.isComplete == false && entry.value.isComplete ? entry.key : nil
+        })
+        let errorStates: Set<String> = ["error", "missingFiles"]
+        let newlyErroredIDs = Set(current.stateByID.compactMap { entry in
+            let isNowErrored = errorStates.contains(entry.value.rawState)
+            let wasErrored = previous.stateByID[entry.key].map { errorStates.contains($0.rawState) } ?? false
+            return isNowErrored && !wasErrored ? entry.key : nil
+        })
+        let previousIncompleteIDs = Set(previous.stateByID.compactMap { entry in
+            entry.value.isComplete ? nil : entry.key
+        })
+        let currentIncompleteIDs = Set(current.stateByID.compactMap { entry in
+            entry.value.isComplete ? nil : entry.key
+        })
+
+        if systemNotificationsEnabled {
+            for torrent in torrents where newlyAddedIDs.contains(torrent.id) && notifyOnTorrentAdded {
+                MacOSNotifications.post(title: "Torrent added", body: "‘\(torrent.name)’ was added.")
+            }
+            for torrent in torrents where newlyCompletedIDs.contains(torrent.id) && notifyOnDownloadComplete {
+                MacOSNotifications.post(title: "Download completed", body: "‘\(torrent.name)’ has finished downloading.")
+            }
+            for torrent in torrents where newlyErroredIDs.contains(torrent.id) && notifyOnTorrentError {
+                let issue = torrent.rawState == "missingFiles" ? "has missing files" : "has an error"
+                MacOSNotifications.post(title: "Torrent problem", body: "‘\(torrent.name)’ \(issue). Check its status in qBitX.")
             }
         }
+
+        if recursiveDownloadEnabled, store.usesBundledBackend, !newlyCompletedIDs.isEmpty {
+            inspectForRecursiveTorrents(torrents.filter { newlyCompletedIDs.contains($0.id) })
+        }
+
+        guard !previousIncompleteIDs.isEmpty,
+              currentIncompleteIDs.isEmpty,
+              previousIncompleteIDs.allSatisfy({ current.stateByID[$0]?.isComplete == true }),
+              downloadCompletionAction != "none" else { return }
+
+        if confirmAutoCompletionAction {
+            showsDownloadCompletionAction = true
+        } else {
+            performDownloadCompletionAction()
+        }
+    }
+
+    private var recursiveTorrentConfirmationMessage: String {
+        var seenNames = Set<String>()
+        let sourceNames = recursiveTorrentSourceNames.filter { seenNames.insert($0).inserted }
+        let sourceSummary: String
+        if sourceNames.count <= 3 {
+            sourceSummary = "\(sourceNames.map { "‘\($0)’" }.joined(separator: ", "))"
+        } else {
+            sourceSummary = "\(sourceNames.prefix(3).map { "‘\($0)’" }.joined(separator: ", ")) and \(sourceNames.count - 3) more"
+        }
+        let fileNoun = recursiveTorrentCandidates.count == 1 ? ".torrent file" : ".torrent files"
+        let addQuestion = recursiveTorrentCandidates.count == 1 ? "Add it now?" : "Add them now?"
+        return "The completed torrent\(sourceNames.count == 1 ? "" : "s") \(sourceSummary) contain\(sourceNames.count == 1 ? "s" : "") \(recursiveTorrentCandidates.count) \(fileNoun). \(addQuestion)"
+    }
+
+    private func inspectForRecursiveTorrents(_ completedTorrents: [Torrent]) {
+        let unseenTorrents = completedTorrents.filter { inspectedRecursiveTorrentIDs.insert($0.id).inserted }
+        guard !unseenTorrents.isEmpty else { return }
+
+        Task {
+            var discoveredCandidates: [RecursiveTorrentCandidate] = []
+            var discoveredSourceNames: [String] = []
+            var knownCandidates = Set(recursiveTorrentCandidates.map(\.id))
+
+            for torrent in unseenTorrents {
+                do {
+                    let torrentFiles = try await store.files(for: torrent.id)
+                    var foundTorrentFile = false
+                    for file in torrentFiles where URL(fileURLWithPath: file.name).pathExtension.lowercased() == "torrent" {
+                        guard localTorrentFileURL(relativePath: file.name, savePath: torrent.savePath) != nil else { continue }
+                        let candidate = RecursiveTorrentCandidate(relativePath: file.name, savePath: torrent.savePath)
+                        if knownCandidates.insert(candidate.id).inserted {
+                            discoveredCandidates.append(candidate)
+                            foundTorrentFile = true
+                        }
+                    }
+                    if foundTorrentFile { discoveredSourceNames.append(torrent.name) }
+                } catch {
+                    actionError = "Could not inspect the completed torrent ‘\(torrent.name)’ for .torrent files: \(error.localizedDescription)"
+                }
+            }
+
+            guard recursiveDownloadEnabled, store.usesBundledBackend, !discoveredCandidates.isEmpty else { return }
+            recursiveTorrentCandidates.append(contentsOf: discoveredCandidates)
+            recursiveTorrentSourceNames.append(contentsOf: discoveredSourceNames)
+            showsRecursiveTorrentConfirmation = true
+        }
+    }
+
+    private func localTorrentFileURL(relativePath: String, savePath: String) -> URL? {
+        let pathComponents = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !savePath.isEmpty,
+              !pathComponents.isEmpty,
+              pathComponents.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+              pathComponents.last.map({ URL(fileURLWithPath: String($0)).pathExtension.lowercased() == "torrent" }) == true else { return nil }
+
+        let fileManager = FileManager.default
+        let rootURL = URL(fileURLWithPath: savePath, isDirectory: true).resolvingSymlinksInPath().standardizedFileURL
+        let candidateURL = pathComponents.reduce(rootURL) { partialURL, component in
+            partialURL.appendingPathComponent(String(component), isDirectory: false)
+        }.resolvingSymlinksInPath().standardizedFileURL
+        let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        guard candidateURL.path.hasPrefix(rootPrefix),
+              let attributes = try? fileManager.attributesOfItem(atPath: candidateURL.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              fileManager.isReadableFile(atPath: candidateURL.path) else { return nil }
+        return candidateURL
+    }
+
+    private func addRecursiveTorrentCandidates() {
+        let candidates = recursiveTorrentCandidates
+        discardRecursiveTorrentCandidates()
+        guard !candidates.isEmpty else { return }
+        guard store.usesBundledBackend else {
+            actionError = "Nested torrents can only be added from files available in the local qBitX library."
+            return
+        }
+
+        Task {
+            var failures: [String] = []
+            for candidate in candidates {
+                guard store.usesBundledBackend else {
+                    failures.append("\(candidate.filename): qBitX switched to a remote server")
+                    continue
+                }
+                guard let url = localTorrentFileURL(relativePath: candidate.relativePath, savePath: candidate.savePath) else {
+                    failures.append("\(candidate.filename): the file is no longer available inside its download folder")
+                    continue
+                }
+                do {
+                    let data = try Data(contentsOf: url)
+                    var options = TorrentAddOptions()
+                    options.savePath = candidate.savePath
+                    options.automaticManagement = false
+                    try await store.add(file: data, filename: candidate.filename, options: options)
+                } catch {
+                    failures.append("\(candidate.filename): \(error.localizedDescription)")
+                }
+            }
+            if !failures.isEmpty {
+                actionError = "Some nested torrents could not be added. " + failures.joined(separator: "\n")
+            }
+        }
+    }
+
+    private func discardRecursiveTorrentCandidates() {
+        showsRecursiveTorrentConfirmation = false
+        recursiveTorrentCandidates = []
+        recursiveTorrentSourceNames = []
     }
 
     private func performDownloadCompletionAction() {
@@ -2291,6 +2528,12 @@ struct PendingTorrentFile: Identifiable {
     let data: Data
 }
 
+private struct AddTorrentPathProfile: Codable {
+    var lastSavePath = ""
+    var savePathHistory: [String] = []
+    var incompletePathHistory: [String] = []
+}
+
 private struct ToolbarLabelStyle: LabelStyle {
     let style: String
 
@@ -2328,8 +2571,12 @@ private struct AboutView: View {
 struct AddTorrentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("qBitX.addTorrentDefaultCategory") private var defaultCategory = ""
+    @AppStorage("qBitX.addTorrent.rememberLastSavePath") private var rememberLastSavePath = false
+    @AppStorage("qBitX.addTorrent.pathProfiles") private var pathProfilesJSON = "{}"
+    @AppStorage("qBitX.addTorrent.fileFilterMode") private var fileFilterMode = "wildcards"
     let file: PendingTorrentFile?
     let store: TorrentStore
+    let showOptions: Bool
     let initialURL: String
     let initialDownloader: String?
     let onAdd: (String, String?, TorrentAddOptions) async throws -> Void
@@ -2353,14 +2600,19 @@ struct AddTorrentSheet: View {
     @State private var uploadLimit = 0
     @State private var metadata: TorrentMetadata?
     @State private var filePriorities: [Int] = []
+    @State private var renamedFilePaths: [String: String] = [:]
     @State private var fileFilter = ""
     @State private var isLoadingMetadata = false
     @State private var errorMessage: String?
     @State private var isAdding = false
+    @State private var isLoadingDefaults = true
+    @State private var serverDefaultAddOptions = TorrentAddOptions()
+    @State private var didAddTorrent = false
 
-    init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Void) {
+    init(file: PendingTorrentFile?, store: TorrentStore, initialURL: String = "", initialDownloader: String? = nil, showOptions: Bool = true, onAdd: @escaping (String, String?, TorrentAddOptions) async throws -> Void) {
         self.file = file
         self.store = store
+        self.showOptions = showOptions
         self.initialURL = initialURL
         self.initialDownloader = initialDownloader
         self.onAdd = onAdd
@@ -2369,7 +2621,44 @@ struct AddTorrentSheet: View {
 
     private var files: [TorrentMetadataFile] { metadata?.info?.files ?? [] }
     private var filteredFileIndices: [Int] {
-        files.indices.filter { fileFilter.isEmpty || files[$0].path.localizedCaseInsensitiveContains(fileFilter) }
+        files.indices.filter { fileFilter.isEmpty || matchesFileFilter(files[$0].path, pattern: fileFilter) }
+    }
+    private var selectedFilesSize: Int64 {
+        files.indices.reduce(into: Int64(0)) { total, index in
+            if filePriorities.indices.contains(index), filePriorities[index] > 0 {
+                total += files[index].length
+            }
+        }
+    }
+    private var hasInvalidRenamedFilePaths: Bool {
+        renamedFilePaths.values.contains { path in
+            path.isEmpty || path.hasPrefix("/") || path.split(separator: "/", omittingEmptySubsequences: false).contains("..")
+        }
+    }
+    private var savePathHistory: [String] {
+        currentPathProfile.savePathHistory
+    }
+    private var incompletePathHistory: [String] {
+        currentPathProfile.incompletePathHistory
+    }
+    private var currentPathProfile: AddTorrentPathProfile {
+        pathProfiles[pathProfileKey] ?? AddTorrentPathProfile()
+    }
+    private var pathProfiles: [String: AddTorrentPathProfile] {
+        guard let data = pathProfilesJSON.data(using: .utf8),
+              let profiles = try? JSONDecoder().decode([String: AddTorrentPathProfile].self, from: data) else { return [:] }
+        return profiles
+    }
+    private var pathProfileKey: String {
+        guard let saved = SavedRemoteConnection.load() else { return "local-library" }
+        guard var components = URLComponents(string: saved.address) else { return "remote:\(saved.address)" }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        return components.string ?? "remote:\(saved.address)"
     }
 
     var body: some View {
@@ -2382,7 +2671,7 @@ struct AddTorrentSheet: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if file == nil {
+                if file == nil && showOptions {
                     Button("Load Content") { Task { await loadMetadata() } }
                         .buttonStyle(.glass)
                         .disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoadingMetadata)
@@ -2392,17 +2681,58 @@ struct AddTorrentSheet: View {
                 TextField("magnet:?xt=… or https://…", text: $url)
                     .textFieldStyle(.roundedBorder)
             }
-            HStack(alignment: .top, spacing: 14) {
+            if showOptions {
+                HStack(alignment: .top, spacing: 14) {
                 Form {
                     Section("Location and organization") {
-                        TextField("Save location", text: $savePath, prompt: Text("Backend default"))
-                            .disabled(automaticManagement)
+                        HStack {
+                            TextField("Save location", text: $savePath, prompt: Text("Backend default"))
+                                .disabled(automaticManagement)
+                            if !savePathHistory.isEmpty {
+                                Menu {
+                                    ForEach(savePathHistory, id: \.self) { path in
+                                        Button(path) { savePath = path }
+                                    }
+                                } label: {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                }
+                                .help("Recent save locations")
+                            }
+                            Button {
+                                chooseDirectory(currentPath: savePath) { savePath = $0 }
+                            } label: {
+                                Image(systemName: "folder")
+                            }
+                            .disabled(automaticManagement || !store.usesBundledBackend)
+                            .help(store.usesBundledBackend ? "Choose save location" : "Remote server paths must be entered as server paths.")
+                        }
                         Toggle("Use another path for incomplete torrents", isOn: $downloadPathEnabled)
                             .disabled(automaticManagement)
                         if downloadPathEnabled {
-                            TextField("Incomplete save path", text: $downloadPath)
-                                .disabled(automaticManagement)
+                            HStack {
+                                TextField("Incomplete save path", text: $downloadPath)
+                                    .disabled(automaticManagement)
+                                if !incompletePathHistory.isEmpty {
+                                    Menu {
+                                        ForEach(incompletePathHistory, id: \.self) { path in
+                                            Button(path) { downloadPath = path }
+                                        }
+                                    } label: {
+                                        Image(systemName: "clock.arrow.circlepath")
+                                    }
+                                    .help("Recent incomplete save locations")
+                                }
+                                Button {
+                                    chooseDirectory(currentPath: downloadPath) { downloadPath = $0 }
+                                } label: {
+                                    Image(systemName: "folder")
+                                }
+                                .disabled(automaticManagement || !store.usesBundledBackend)
+                                .help(store.usesBundledBackend ? "Choose incomplete save location" : "Remote server paths must be entered as server paths.")
+                            }
                         }
+                        Toggle("Remember last used save location", isOn: $rememberLastSavePath)
+                            .disabled(automaticManagement)
                         TextField("Rename torrent", text: $rename, prompt: Text("Keep original name"))
                         TextField("Category", text: $category)
                         Toggle("Set as default category", isOn: $setDefaultCategory)
@@ -2440,14 +2770,61 @@ struct AddTorrentSheet: View {
                         Spacer()
                         if !files.isEmpty { Text("\(files.count) files").font(.caption).foregroundStyle(.secondary) }
                     }
+                    if let metadata {
+                        VStack(alignment: .leading, spacing: 3) {
+                            if let totalSize = metadata.info?.length {
+                                Text("Torrent size: \(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file))")
+                                    .font(.caption)
+                            }
+                            Text("Selected size: \(ByteCountFormatter.string(fromByteCount: selectedFilesSize, countStyle: .file))")
+                                .font(.caption.weight(.medium))
+                            if let freeSpace = availableDiskSpace(for: savePath) {
+                                Text("Free space: \(ByteCountFormatter.string(fromByteCount: freeSpace, countStyle: .file))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text("Created: \(metadata.creation_date.map { Date(timeIntervalSince1970: TimeInterval($0)).formatted(date: .numeric, time: .shortened) } ?? "Not available")")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Info hash v1: \(metadata.infohash_v1 ?? "Not available")")
+                                .font(.caption2.monospaced()).textSelection(.enabled).lineLimit(1)
+                            Text("Info hash v2: \(metadata.infohash_v2 ?? "Not available")")
+                                .font(.caption2.monospaced()).textSelection(.enabled).lineLimit(1)
+                            if let comment = metadata.comment, !comment.isEmpty {
+                                Text("Comment: \(comment)")
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                            }
+                        }
+                        .padding(.vertical, 3)
+                    }
                     if !files.isEmpty {
-                        TextField("Filter files…", text: $fileFilter)
-                            .textFieldStyle(.roundedBorder)
+                        HStack {
+                            TextField("Filter files…", text: $fileFilter)
+                                .textFieldStyle(.roundedBorder)
+                            Menu {
+                                Picker("Match", selection: $fileFilterMode) {
+                                    Text("Plain text").tag("plain")
+                                    Text("Wildcards").tag("wildcards")
+                                    Text("Regular expression").tag("regex")
+                                }
+                            } label: {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                            }
+                            .help("Choose file filter pattern")
+                        }
+                        HStack(spacing: 10) {
+                            Button("Select All") { filePriorities = Array(repeating: 1, count: files.count) }
+                            Button("Select None") { filePriorities = Array(repeating: 0, count: files.count) }
+                            Spacer()
+                        }
                         List {
                             ForEach(filteredFileIndices, id: \.self) { index in
                                 HStack(spacing: 8) {
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text(files[index].path).lineLimit(1)
+                                        TextField(files[index].path, text: Binding(
+                                            get: { renamedFilePaths[files[index].path] ?? files[index].path },
+                                            set: { renamedFilePaths[files[index].path] = $0 }
+                                        ))
+                                        .textFieldStyle(.plain)
+                                        .lineLimit(1)
                                         Text(ByteCountFormatter.string(fromByteCount: files[index].length, countStyle: .file))
                                             .font(.caption2).foregroundStyle(.secondary)
                                     }
@@ -2475,6 +2852,10 @@ struct AddTorrentSheet: View {
                     } else {
                         ContentUnavailableView("No File List", systemImage: "doc.text.magnifyingglass", description: Text(file == nil ? "Load metadata to preview files and set priorities before adding." : "Torrent metadata could not be loaded."))
                     }
+                    if hasInvalidRenamedFilePaths {
+                        Text("File names must stay inside the torrent’s folder.")
+                            .font(.caption).foregroundStyle(.red)
+                    }
                     if let metadata {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(metadata.info?.name ?? "Torrent metadata").font(.caption.weight(.semibold)).lineLimit(1)
@@ -2486,39 +2867,74 @@ struct AddTorrentSheet: View {
                     }
                 }
                 .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .frame(height: 505)
+                .disabled(isLoadingDefaults)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tint)
+                    Text("This torrent will use the server’s default download settings.")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Text("You can change the default download folder and behavior in qBittorrent Preferences.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 190)
             }
-            .frame(height: 505)
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.red)
-            }
+                    if let errorMessage {
+                        Text(errorMessage).font(.caption).foregroundStyle(.red)
+                    }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Add Torrent") {
+                Button(didAddTorrent ? "Done" : "Add Torrent") {
+                    if didAddTorrent { dismiss(); return }
                     isAdding = true
                     Task {
                         do {
-                            var options = TorrentAddOptions()
-                            options.savePath = savePath.trimmingCharacters(in: .whitespacesAndNewlines)
-                            options.downloadPathEnabled = downloadPathEnabled && !automaticManagement
-                            options.downloadPath = downloadPath.trimmingCharacters(in: .whitespacesAndNewlines)
-                            options.category = category.trimmingCharacters(in: .whitespacesAndNewlines)
-                            options.rename = rename.trimmingCharacters(in: .whitespacesAndNewlines)
-                            options.tags = tags.trimmingCharacters(in: .whitespacesAndNewlines)
-                            options.stopped = stopped
-                            options.automaticManagement = automaticManagement
-                            options.addToQueueTop = addToQueueTop
-                            options.seedMode = seedMode
-                            options.sequential = sequential
-                            options.firstLastPiece = firstLastPiece
-                            options.stopCondition = stopCondition
-                            options.contentLayout = contentLayout
-                            options.downloadLimitKiB = max(0, downloadLimit)
-                            options.uploadLimitKiB = max(0, uploadLimit)
-                            options.filePriorities = files.isEmpty ? nil : filePriorities
+                            var options = showOptions ? serverDefaultAddOptions : try await store.defaultTorrentAddOptions()
+                            if showOptions {
+                                options.savePath = savePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                                options.downloadPathEnabled = downloadPathEnabled && !automaticManagement
+                                options.downloadPath = downloadPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                                options.category = category.trimmingCharacters(in: .whitespacesAndNewlines)
+                                options.rename = rename.trimmingCharacters(in: .whitespacesAndNewlines)
+                                options.tags = tags.trimmingCharacters(in: .whitespacesAndNewlines)
+                                options.stopped = stopped
+                                options.automaticManagement = automaticManagement
+                                options.addToQueueTop = addToQueueTop
+                                options.seedMode = seedMode
+                                options.sequential = sequential
+                                options.firstLastPiece = firstLastPiece
+                                options.stopCondition = stopCondition
+                                options.contentLayout = contentLayout
+                                options.downloadLimitKiB = max(0, downloadLimit)
+                                options.uploadLimitKiB = max(0, uploadLimit)
+                                options.filePriorities = files.isEmpty ? nil : filePriorities
+                            } else if options.category.isEmpty {
+                                options.category = defaultCategory
+                            }
                             let source = file == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : (metadata?.magnetURI ?? "")
                             if setDefaultCategory { defaultCategory = options.category }
                             try await onAdd(source, initialDownloader, options)
+                            didAddTorrent = true
+                            if let hash = metadata?.id ?? metadata?.infohash_v1 ?? metadata?.infohash_v2 {
+                                do {
+                                    for item in files {
+                                        guard let newPath = renamedFilePaths[item.path], newPath != item.path else { continue }
+                                        try await store.renameFile(hash: hash, oldPath: item.path, newPath: newPath)
+                                    }
+                                } catch {
+                                    errorMessage = "The torrent was added, but a file could not be renamed: \(error.localizedDescription)"
+                                    isAdding = false
+                                    return
+                                }
+                            }
+                            rememberSaveLocationIfNeeded()
                             dismiss()
                         } catch {
                             errorMessage = error.localizedDescription
@@ -2527,16 +2943,115 @@ struct AddTorrentSheet: View {
                     }
                 }
                 .buttonStyle(.glassProminent)
-                .disabled((file == nil && url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || isAdding || !(0...1_000_000).contains(downloadLimit) || !(0...1_000_000).contains(uploadLimit))
+                .disabled(!didAddTorrent && !isReadyToAdd)
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(25)
-        .frame(minWidth: 900, idealWidth: 980, minHeight: 690, idealHeight: 760)
+        .frame(minWidth: showOptions ? 900 : 460, idealWidth: showOptions ? 980 : 520, minHeight: showOptions ? 690 : 370, idealHeight: showOptions ? 760 : 430)
         .task {
-            if category.isEmpty { category = defaultCategory }
-            if file != nil || !initialURL.isEmpty { await loadMetadata() }
+            await loadServerDefaults()
+            if showOptions && (file != nil || !initialURL.isEmpty) { await loadMetadata() }
         }
+    }
+
+    private var isReadyToAdd: Bool {
+        !isLoadingDefaults
+            && !(file == nil && url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            && !isAdding
+            && !hasInvalidRenamedFilePaths
+            && (!showOptions || ((0...1_000_000).contains(downloadLimit) && (0...1_000_000).contains(uploadLimit)))
+    }
+
+    private func loadServerDefaults() async {
+        do {
+            let options = try await store.defaultTorrentAddOptions()
+            serverDefaultAddOptions = options
+            if showOptions {
+                savePath = options.savePath
+                downloadPathEnabled = options.downloadPathEnabled
+                downloadPath = options.downloadPath
+                category = defaultCategory.isEmpty ? options.category : defaultCategory
+                stopped = options.stopped
+                automaticManagement = options.automaticManagement
+                addToQueueTop = options.addToQueueTop
+                stopCondition = options.stopCondition
+                contentLayout = options.contentLayout
+                if rememberLastSavePath, !currentPathProfile.lastSavePath.isEmpty { savePath = currentPathProfile.lastSavePath }
+                if rememberLastSavePath, let recentIncompletePath = incompletePathHistory.first {
+                    downloadPath = recentIncompletePath
+                }
+            }
+        } catch {
+            errorMessage = "Could not load the server’s default torrent settings: \(error.localizedDescription)"
+            if showOptions, category.isEmpty { category = defaultCategory }
+        }
+        isLoadingDefaults = false
+    }
+
+    private func matchesFileFilter(_ path: String, pattern: String) -> Bool {
+        switch fileFilterMode {
+        case "regex":
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+            return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+        case "wildcards":
+            let expression = NSRegularExpression.escapedPattern(for: pattern)
+                .replacingOccurrences(of: "\\*", with: ".*")
+                .replacingOccurrences(of: "\\?", with: ".")
+            guard let regex = try? NSRegularExpression(pattern: expression, options: [.caseInsensitive]) else { return false }
+            return regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)) != nil
+        default:
+            return path.localizedCaseInsensitiveContains(pattern)
+        }
+    }
+
+    private func chooseDirectory(currentPath: String, setPath: (String) -> Void) {
+        guard store.usesBundledBackend else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = currentPath.isEmpty ? nil : URL(fileURLWithPath: currentPath, isDirectory: true)
+        if panel.runModal() == .OK, let url = panel.url { setPath(url.path) }
+    }
+
+    private func availableDiskSpace(for path: String) -> Int64? {
+        guard store.usesBundledBackend, !path.isEmpty else { return nil }
+        var current = URL(fileURLWithPath: path, isDirectory: true)
+        while true {
+            if let attributes = try? FileManager.default.attributesOfFileSystem(forPath: current.path),
+               let freeSpace = attributes[.systemFreeSize] as? NSNumber {
+                return freeSpace.int64Value
+            }
+            let parent = current.deletingLastPathComponent()
+            guard parent.path != current.path else { return nil }
+            current = parent
+        }
+    }
+
+    private func rememberSaveLocationIfNeeded() {
+        guard showOptions, !automaticManagement else { return }
+        let path = savePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return }
+        var profile = currentPathProfile
+        if rememberLastSavePath { profile.lastSavePath = path }
+        profile.savePathHistory = updatedPathHistory(savePath, priorHistory: profile.savePathHistory)
+        if downloadPathEnabled {
+            profile.incompletePathHistory = updatedPathHistory(downloadPath, priorHistory: profile.incompletePathHistory)
+        }
+        var profiles = pathProfiles
+        profiles[pathProfileKey] = profile
+        guard let data = try? JSONEncoder().encode(profiles) else { return }
+        pathProfilesJSON = String(decoding: data, as: UTF8.self)
+    }
+
+    private func updatedPathHistory(_ path: String, priorHistory: [String]) -> [String] {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return priorHistory }
+        var history = priorHistory.filter { $0 != trimmedPath }
+        history.insert(trimmedPath, at: 0)
+        if history.count > 20 { history.removeLast(history.count - 20) }
+        return history
     }
 
     private func loadMetadata() async {

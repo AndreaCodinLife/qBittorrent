@@ -117,6 +117,23 @@ final class TorrentStore {
         return try await api.preferencesData()
     }
 
+    func defaultTorrentAddOptions() async throws -> TorrentAddOptions {
+        let data = try await preferencesData()
+        guard let preferences = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.badResponse
+        }
+        var options = TorrentAddOptions()
+        options.savePath = preferences["save_path"] as? String ?? ""
+        options.downloadPathEnabled = preferences["temp_path_enabled"] as? Bool ?? false
+        options.downloadPath = preferences["temp_path"] as? String ?? ""
+        options.stopped = preferences["add_stopped_enabled"] as? Bool ?? false
+        options.automaticManagement = preferences["auto_tmm_enabled"] as? Bool ?? false
+        options.addToQueueTop = preferences["add_to_top_of_queue"] as? Bool ?? false
+        options.stopCondition = preferences["torrent_stop_condition"] as? String ?? "None"
+        options.contentLayout = preferences["torrent_content_layout"] as? String ?? "Original"
+        return options
+    }
+
     func networkInterfaces() async throws -> [NetworkInterfaceOption] {
         guard let api else { throw TorrentStoreError.disconnected }
         return try await api.networkInterfaces()
