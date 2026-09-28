@@ -2,8 +2,15 @@ import SwiftUI
 
 @main
 struct QBitXApp: App {
-    @State private var store = TorrentStore()
+    @NSApplicationDelegateAdaptor(QBitXApplicationDelegate.self) private var appDelegate
+    @State private var store: TorrentStore
     @AppStorage("qBitX.showSpeedInMenuBar") private var showSpeedInMenuBar = false
+
+    init() {
+        let store = TorrentStore()
+        _store = State(initialValue: store)
+        QBitXApplicationDelegate.store = store
+    }
 
     var body: some Scene {
         WindowGroup("qBitX", id: "main") {

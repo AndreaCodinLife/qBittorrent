@@ -12,6 +12,7 @@ enum TorrentStoreError: LocalizedError {
 final class TorrentStore {
     private(set) var torrents: [Torrent] = []
     private(set) var transferStatus = TransferStatus()
+    private(set) var serverStatistics: ServerStatistics?
     private(set) var serverVersion = ""
     private(set) var serverAPIVersion = ""
     private(set) var connectionError: String?
@@ -22,6 +23,7 @@ final class TorrentStore {
     private let backend = BundledBackend()
     private var api: QBittorrentAPI?
     private var trackerSummaryRefreshedAt: Date?
+    @ObservationIgnored private var serverStatisticsRefreshedAt: Date?
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
     @ObservationIgnored private var runTask: Task<Void, Never>?
 
@@ -41,6 +43,8 @@ final class TorrentStore {
         serverAPIVersion = ""
         sessionSpeedHistory = []
         trackerSummaryRefreshedAt = nil
+        serverStatistics = nil
+        serverStatisticsRefreshedAt = nil
         api = nil
         do {
             let connectedAPI: QBittorrentAPI
@@ -184,7 +188,10 @@ final class TorrentStore {
 
     func statistics() async throws -> ServerStatistics {
         guard let api else { throw TorrentStoreError.disconnected }
-        return try await api.statistics()
+        let statistics = try await api.statistics()
+        serverStatistics = statistics
+        serverStatisticsRefreshedAt = Date()
+        return statistics
     }
 
     func mainLog(after id: Int, normal: Bool = true, info: Bool = true, warning: Bool = true, critical: Bool = true) async throws -> [LogEntry] {
@@ -221,6 +228,12 @@ final class TorrentStore {
             }
             torrents = refreshedTorrents
             transferStatus = try await newStatus
+            if serverStatisticsRefreshedAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true {
+                serverStatisticsRefreshedAt = now
+                if let statistics = try? await api.statistics() {
+                    serverStatistics = statistics
+                }
+            }
             isConnected = true
             MacOSStatusPresentation.updateDockSpeed(transferStatus)
             updateSleepInhibition()

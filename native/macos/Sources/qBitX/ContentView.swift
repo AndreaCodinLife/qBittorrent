@@ -69,6 +69,16 @@ private struct TorrentSort: Identifiable, Equatable {
     static let name = allCases[1]
 }
 
+private enum TorrentDisplayValues {
+    static let hiddenWhenZero: Set<String> = [
+        "size", "total_size", "seeds", "peers", "ratio", "ratio_limit", "popularity", "dl_limit", "up_limit",
+        "downloaded", "uploaded", "downloaded_session", "uploaded_session", "amount_left", "completed",
+        "availability", "reannounce", "time_active", "private"
+    ]
+    static let hiddenWhenInfinite: Set<String> = ["ratio", "ratio_limit", "popularity", "dl_limit", "up_limit"]
+    static let infinityLabels = ["unlimited", "infinity", "∞"]
+}
+
 struct ContentView: View {
     @Bindable var store: TorrentStore
     @AppStorage("qBitX.showFiltersSidebar") private var showFiltersSidebar = true
@@ -79,8 +89,21 @@ struct ContentView: View {
     @AppStorage("qBitX.showSpeedInTitleBar") private var showSpeedInTitleBar = false
     @AppStorage("qBitX.showSpeedInDock") private var showSpeedInDock = false
     @AppStorage("qBitX.showSpeedInMenuBar") private var showSpeedInMenuBar = false
+    @AppStorage("qBitX.showFreeDiskSpace") private var showFreeDiskSpace = false
+    @AppStorage("qBitX.showExternalIP") private var showExternalIP = false
+    @AppStorage("qBitX.dragContentFiles") private var dragContentFiles = false
+    @AppStorage("qBitX.doubleClick.downloading") private var downloadingDoubleClickAction = TorrentDoubleClickAction.toggleStop.rawValue
+    @AppStorage("qBitX.doubleClick.completed") private var completedDoubleClickAction = TorrentDoubleClickAction.openDestination.rawValue
+    @AppStorage("qBitX.hideZeroValues") private var hideZeroValues = false
+    @AppStorage("qBitX.hideZeroValuesMode") private var hideZeroValuesMode = "always"
+    @AppStorage("qBitX.confirmTorrentDeletion") private var confirmTorrentDeletion = true
+    @AppStorage("qBitX.startMinimized") private var startMinimized = false
+    @AppStorage("qBitX.alternatingTransferRows") private var alternatingTransferRows = true
+    @AppStorage("qBitX.colorTransfersByState") private var colorTransfersByState = true
+    @AppStorage("qBitX.progressBarFollowsStateColor") private var progressBarFollowsStateColor = false
     @AppStorage("qBitX.preventSleepWhenDownloading") private var preventSleepWhenDownloading = false
     @AppStorage("qBitX.preventSleepWhenSeeding") private var preventSleepWhenSeeding = false
+    @AppStorage("qBitX.confirmAutoCompletionAction") private var confirmAutoCompletionAction = true
     @AppStorage("qBitX.showTrackerStatusFilter") private var showTrackerStatusFilter = true
     @AppStorage("qBitX.separateTrackerStatusFilter") private var separateTrackerStatusFilter = false
     @AppStorage("qBitX.hideZeroStatusFilters") private var hideZeroStatusFilters = false
@@ -122,6 +145,7 @@ struct ContentView: View {
     @State private var showsClearTagsConfirmation = false
     @State private var clearTagsHashes: [String] = []
     @State private var showsConnectionSettings = false
+    @State private var showsAppPreferences = false
     @State private var showsBackendPreferences = false
     @State private var showsSpeedLimits = false
     @State private var showsStatistics = false
@@ -201,6 +225,39 @@ struct ContentView: View {
         if left < right { return .orderedAscending }
         if left > right { return .orderedDescending }
         return .orderedSame
+    }
+
+    private func shouldHideZeroValues(for torrent: Torrent) -> Bool {
+        hideZeroValues && (hideZeroValuesMode == "always" || (hideZeroValuesMode == "stopped" && torrent.rawState == "stoppedDL"))
+    }
+
+    private func displayValue(_ value: String, numericValue: Double?, key: String, torrent: Torrent) -> String {
+        guard shouldHideZeroValues(for: torrent) else { return value }
+        if TorrentDisplayValues.hiddenWhenZero.contains(key), numericValue == 0 { return "" }
+        if TorrentDisplayValues.hiddenWhenInfinite.contains(key),
+           let numericValue, numericValue < 0 { return "" }
+        if TorrentDisplayValues.hiddenWhenInfinite.contains(key),
+           TorrentDisplayValues.infinityLabels.contains(where: value.localizedCaseInsensitiveContains) { return "" }
+        return value
+    }
+
+    private func displayColumn(_ key: String, torrent: Torrent) -> String {
+        displayValue(torrent.column(key), numericValue: torrent.sortNumbers[key], key: key, torrent: torrent)
+    }
+
+    private func stateColored<Content: View>(_ content: Content, for torrent: Torrent) -> some View {
+        content.foregroundStyle(colorTransfersByState ? stateColor(for: torrent) : Color.primary)
+    }
+
+    private func stateColor(for torrent: Torrent) -> Color {
+        switch torrent.rawState {
+        case "uploading", "forcedUP": .green
+        case "stalledUP", "stalledDL": .orange
+        case "stoppedUP", "stoppedDL", "queuedUP", "queuedDL": .gray
+        case "checkingUP", "checkingDL", "checkingResumeData", "moving": .purple
+        case "error", "missingFiles": .red
+        default: .blue
+        }
     }
 
     private var selectedTorrent: Torrent? {
@@ -290,6 +347,9 @@ struct ContentView: View {
             syncWindowTitle()
             MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: showSpeedInDock)
             store.updateSleepInhibition()
+            if startMinimized {
+                DispatchQueue.main.async { NSApp.keyWindow?.miniaturize(nil) }
+            }
         }
         .onChange(of: showSpeedInDock) { _, enabled in
             MacOSStatusPresentation.updateDockSpeed(store.transferStatus, enabled: enabled)
@@ -308,7 +368,7 @@ struct ContentView: View {
             addTorrentURL: { showsURLSheet = true },
             pasteTorrentLinks: pasteTorrentLinks,
             createTorrent: { showsTorrentCreator = true },
-            removeSelected: { if !selectedTorrentIDs.isEmpty { showsRemoveConfirmation = true } },
+            removeSelected: { requestRemoval(hashes: selectedHashes) },
             startSelected: { runBulkAction { try await store.command(.start, hashes: $0) } },
             stopSelected: { runBulkAction { try await store.command(.stop, hashes: $0) } },
             forceStartSelected: { runBulkAction { try await store.setForceStart(true, hashes: $0) } },
@@ -319,6 +379,7 @@ struct ContentView: View {
             moveSelectedToBottom: { runBulkAction { try await store.command(.bottomPrio, hashes: $0) } },
             pauseSession: { setSessionPaused(true) },
             resumeSession: { setSessionPaused(false) },
+            showAppPreferences: { showsAppPreferences = true },
             showPreferences: { showsBackendPreferences = true },
             showStatistics: { showsStatistics = true },
             showSpeedLimits: { showsSpeedLimits = true },
@@ -354,6 +415,7 @@ struct ContentView: View {
         .sheet(isPresented: $showsConnectionSettings) {
             ConnectionSettingsView(store: store) { retryID += 1 }
         }
+        .sheet(isPresented: $showsAppPreferences) { AppPreferencesView(store: store) }
         .sheet(isPresented: $showsBackendPreferences) { BackendPreferencesView(store: store) }
         .sheet(isPresented: $showsSpeedLimits) { SpeedLimitsView(store: store) }
         .sheet(isPresented: $showsStatistics) { StatisticsView(store: store) }
@@ -438,7 +500,7 @@ struct ContentView: View {
                 }
                 .help("Add a magnet link or torrent URL")
 
-                Button(role: .destructive) { showsRemoveConfirmation = true } label: {
+                Button(role: .destructive) { requestRemoval(hashes: selectedHashes) } label: {
                     toolbarLabel("Remove", image: "trash")
                 }
                 .disabled(selectedTorrent == nil)
@@ -488,9 +550,7 @@ struct ContentView: View {
                 }
 
                 Button {
-                    if let path = selectedTorrent?.savePath, !path.isEmpty {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                    }
+                    if let selectedTorrent { openDestinationFolder(for: selectedTorrent) }
                 } label: {
                     toolbarLabel("Open Destination", image: "folder")
                 }
@@ -652,7 +712,8 @@ struct ContentView: View {
 
     private var settingsToolbarMenu: some View {
         Menu {
-            Button("qBittorrent Preferences…") { showsBackendPreferences = true }
+            Button("qBitX Preferences…") { showsAppPreferences = true }
+            Button("qBittorrent Server Preferences…") { showsBackendPreferences = true }
             Button("File Associations…") { showsFileAssociations = true }
             Button("Categories and Tags…") { openOrganization() }
             Button("Connection…") { showsConnectionSettings = true }
@@ -851,8 +912,7 @@ struct ContentView: View {
             }
             .disabled(hashes.isEmpty)
             Button("Remove Torrents…", role: .destructive) {
-                selectedTorrentIDs = Set(hashes)
-                showsRemoveConfirmation = true
+                requestRemoval(hashes: hashes)
             }
             .disabled(hashes.isEmpty)
         }
@@ -971,6 +1031,7 @@ struct ContentView: View {
         .contextMenu(forSelectionType: String.self) { target in
             torrentContextMenu(for: target)
         }
+        .alternatingRowBackgrounds(alternatingTransferRows ? .enabled : .disabled)
         .overlay {
             if !store.isConnected {
                 VStack(spacing: 12) {
@@ -996,66 +1057,78 @@ struct ContentView: View {
     @TableColumnBuilder<Torrent, Never>
     private var primaryColumns: some TableColumnContent<Torrent, Never> {
         TableColumn("Name") { torrent in
-            Label(torrent.name, systemImage: torrent.state.symbol).lineLimit(1)
+            stateColored(Label(torrent.name, systemImage: torrent.state.symbol), for: torrent)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { handleTorrentDoubleClick(torrent) }
         }
         .width(min: 200, ideal: 270).customizationID("name")
-        TableColumn("Size", value: \.size).width(80).customizationID("size")
+        TableColumn("Size") { torrent in
+            stateColored(Text(displayValue(torrent.size, numericValue: Double(torrent.sizeBytes), key: "size", torrent: torrent)), for: torrent)
+        }.width(80).customizationID("size")
         TableColumn("Progress") { torrent in
-            HStack(spacing: 6) {
+            stateColored(HStack(spacing: 6) {
                 ProgressView(value: torrent.progress)
+                    .tint(colorTransfersByState && progressBarFollowsStateColor ? stateColor(for: torrent) : Color.accentColor)
                 Text(torrent.progress.formatted(.percent.precision(.fractionLength(0))))
                     .font(.caption.monospacedDigit())
                     .frame(width: 32, alignment: .trailing)
-            }
+            }, for: torrent)
         }
         .width(min: 110, ideal: 140).customizationID("progress")
-        TableColumn("Status") { torrent in Text(torrent.state.rawValue) }.width(95).customizationID("status")
-        TableColumn("Seeds") { torrent in Text("\(torrent.seeds)") }.width(55).customizationID("seeds")
-        TableColumn("Peers") { torrent in Text("\(torrent.peers)") }.width(55).customizationID("peers")
-        TableColumn("Down Speed", value: \.downloadRate).width(90).customizationID("down_speed")
-        TableColumn("Up Speed", value: \.uploadRate).width(90).customizationID("up_speed")
-        TableColumn("ETA", value: \.eta).width(70).customizationID("eta")
+        TableColumn("Status") { torrent in stateColored(Text(torrent.state.rawValue), for: torrent) }.width(95).customizationID("status")
+        TableColumn("Seeds") { torrent in
+            let count = torrent.seeds == 0 && (torrent.totalSeeds ?? 0) <= 0 ? 0 : 1
+            stateColored(Text(displayValue(torrent.seedCountText, numericValue: Double(count), key: "seeds", torrent: torrent)), for: torrent)
+        }.width(min: 70, ideal: 86).customizationID("seeds")
+        TableColumn("Peers") { torrent in
+            let count = torrent.peers == 0 && (torrent.totalPeers ?? 0) <= 0 ? 0 : 1
+            stateColored(Text(displayValue(torrent.peerCountText, numericValue: Double(count), key: "peers", torrent: torrent)), for: torrent)
+        }.width(min: 70, ideal: 86).customizationID("peers")
+        TableColumn("Down Speed") { stateColored(Text($0.downloadRate), for: $0) }.width(90).customizationID("down_speed")
+        TableColumn("Up Speed") { stateColored(Text($0.uploadRate), for: $0) }.width(90).customizationID("up_speed")
+        TableColumn("ETA") { stateColored(Text($0.eta), for: $0) }.width(70).customizationID("eta")
     }
 
     @TableColumnBuilder<Torrent, Never>
     private var extraColumnsOne: some TableColumnContent<Torrent, Never> {
-        TableColumn("Queue") { Text($0.column("priority")) }.width(60).customizationID("queue").defaultVisibility(.hidden)
-        TableColumn("Total Size") { Text($0.column("total_size")) }.width(90).customizationID("total_size").defaultVisibility(.hidden)
-        TableColumn("Ratio") { Text($0.column("ratio")) }.width(70).customizationID("ratio").defaultVisibility(.hidden)
-        TableColumn("Popularity") { Text($0.column("popularity")) }.width(80).customizationID("popularity").defaultVisibility(.hidden)
-        TableColumn("Category") { Text($0.column("category")) }.width(100).customizationID("category").defaultVisibility(.hidden)
-        TableColumn("Tags") { Text($0.column("tags")) }.width(100).customizationID("tags").defaultVisibility(.hidden)
-        TableColumn("Added On") { Text($0.column("added_on")) }.width(150).customizationID("added_on").defaultVisibility(.hidden)
-        TableColumn("Seeding Since") { Text($0.column("completion_on")) }.width(150).customizationID("completion_on").defaultVisibility(.hidden)
-        TableColumn("Tracker") { Text($0.column("tracker")) }.width(160).customizationID("tracker").defaultVisibility(.hidden)
-        TableColumn("Down Limit") { Text($0.column("dl_limit")) }.width(90).customizationID("dl_limit").defaultVisibility(.hidden)
+        TableColumn("Queue") { stateColored(Text($0.column("priority")), for: $0) }.width(60).customizationID("queue").defaultVisibility(.hidden)
+        TableColumn("Total Size") { stateColored(Text(displayColumn("total_size", torrent: $0)), for: $0) }.width(90).customizationID("total_size").defaultVisibility(.hidden)
+        TableColumn("Ratio") { stateColored(Text(displayColumn("ratio", torrent: $0)), for: $0) }.width(70).customizationID("ratio").defaultVisibility(.hidden)
+        TableColumn("Popularity") { stateColored(Text(displayColumn("popularity", torrent: $0)), for: $0) }.width(80).customizationID("popularity").defaultVisibility(.hidden)
+        TableColumn("Category") { stateColored(Text($0.column("category")), for: $0) }.width(100).customizationID("category").defaultVisibility(.hidden)
+        TableColumn("Tags") { stateColored(Text($0.column("tags")), for: $0) }.width(100).customizationID("tags").defaultVisibility(.hidden)
+        TableColumn("Added On") { stateColored(Text($0.column("added_on")), for: $0) }.width(150).customizationID("added_on").defaultVisibility(.hidden)
+        TableColumn("Seeding Since") { stateColored(Text($0.column("completion_on")), for: $0) }.width(150).customizationID("completion_on").defaultVisibility(.hidden)
+        TableColumn("Tracker") { stateColored(Text($0.column("tracker")), for: $0) }.width(160).customizationID("tracker").defaultVisibility(.hidden)
+        TableColumn("Down Limit") { stateColored(Text(displayColumn("dl_limit", torrent: $0)), for: $0) }.width(90).customizationID("dl_limit").defaultVisibility(.hidden)
     }
 
     @TableColumnBuilder<Torrent, Never>
     private var extraColumnsTwo: some TableColumnContent<Torrent, Never> {
-        TableColumn("Up Limit") { Text($0.column("up_limit")) }.width(90).customizationID("up_limit").defaultVisibility(.hidden)
-        TableColumn("Downloaded") { Text($0.column("downloaded")) }.width(90).customizationID("downloaded").defaultVisibility(.hidden)
-        TableColumn("Uploaded") { Text($0.column("uploaded")) }.width(90).customizationID("uploaded").defaultVisibility(.hidden)
-        TableColumn("Session Downloaded") { Text($0.column("downloaded_session")) }.width(110).customizationID("downloaded_session").defaultVisibility(.hidden)
-        TableColumn("Session Uploaded") { Text($0.column("uploaded_session")) }.width(110).customizationID("uploaded_session").defaultVisibility(.hidden)
-        TableColumn("Amount Left") { Text($0.column("amount_left")) }.width(90).customizationID("amount_left").defaultVisibility(.hidden)
-        TableColumn("Active Time") { Text($0.column("time_active")) }.width(90).customizationID("time_active").defaultVisibility(.hidden)
-        TableColumn("Save Path") { Text($0.column("save_path")) }.width(220).customizationID("save_path").defaultVisibility(.hidden)
-        TableColumn("Completed") { Text($0.column("completed")) }.width(90).customizationID("completed").defaultVisibility(.hidden)
-        TableColumn("Ratio Limit") { Text($0.column("ratio_limit")) }.width(80).customizationID("ratio_limit").defaultVisibility(.hidden)
+        TableColumn("Up Limit") { stateColored(Text(displayColumn("up_limit", torrent: $0)), for: $0) }.width(90).customizationID("up_limit").defaultVisibility(.hidden)
+        TableColumn("Downloaded") { stateColored(Text(displayColumn("downloaded", torrent: $0)), for: $0) }.width(90).customizationID("downloaded").defaultVisibility(.hidden)
+        TableColumn("Uploaded") { stateColored(Text(displayColumn("uploaded", torrent: $0)), for: $0) }.width(90).customizationID("uploaded").defaultVisibility(.hidden)
+        TableColumn("Session Downloaded") { stateColored(Text(displayColumn("downloaded_session", torrent: $0)), for: $0) }.width(110).customizationID("downloaded_session").defaultVisibility(.hidden)
+        TableColumn("Session Uploaded") { stateColored(Text(displayColumn("uploaded_session", torrent: $0)), for: $0) }.width(110).customizationID("uploaded_session").defaultVisibility(.hidden)
+        TableColumn("Amount Left") { stateColored(Text(displayColumn("amount_left", torrent: $0)), for: $0) }.width(90).customizationID("amount_left").defaultVisibility(.hidden)
+        TableColumn("Active Time") { stateColored(Text(displayColumn("time_active", torrent: $0)), for: $0) }.width(90).customizationID("time_active").defaultVisibility(.hidden)
+        TableColumn("Save Path") { stateColored(Text($0.column("save_path")), for: $0) }.width(220).customizationID("save_path").defaultVisibility(.hidden)
+        TableColumn("Completed") { stateColored(Text(displayColumn("completed", torrent: $0)), for: $0) }.width(90).customizationID("completed").defaultVisibility(.hidden)
+        TableColumn("Ratio Limit") { stateColored(Text(displayColumn("ratio_limit", torrent: $0)), for: $0) }.width(80).customizationID("ratio_limit").defaultVisibility(.hidden)
     }
 
     @TableColumnBuilder<Torrent, Never>
     private var extraColumnsThree: some TableColumnContent<Torrent, Never> {
-        TableColumn("Last Seen Complete") { Text($0.column("seen_complete")) }.width(150).customizationID("seen_complete").defaultVisibility(.hidden)
-        TableColumn("Last Activity") { Text($0.column("last_activity")) }.width(150).customizationID("last_activity").defaultVisibility(.hidden)
-        TableColumn("Availability") { Text($0.column("availability")) }.width(80).customizationID("availability").defaultVisibility(.hidden)
-        TableColumn("Download Path") { Text($0.column("download_path")) }.width(220).customizationID("download_path").defaultVisibility(.hidden)
-        TableColumn("Infohash v1") { Text($0.column("infohash_v1")) }.width(260).customizationID("infohash_v1").defaultVisibility(.hidden)
-        TableColumn("Infohash v2") { Text($0.column("infohash_v2")) }.width(260).customizationID("infohash_v2").defaultVisibility(.hidden)
-        TableColumn("Reannounce") { Text($0.column("reannounce")) }.width(90).customizationID("reannounce").defaultVisibility(.hidden)
-        TableColumn("Private") { Text($0.column("private")) }.width(70).customizationID("private").defaultVisibility(.hidden)
-        TableColumn("Created On") { Text($0.column("creation_date")) }.width(150).customizationID("creation_date").defaultVisibility(.hidden)
+        TableColumn("Last Seen Complete") { stateColored(Text($0.column("seen_complete")), for: $0) }.width(150).customizationID("seen_complete").defaultVisibility(.hidden)
+        TableColumn("Last Activity") { stateColored(Text($0.column("last_activity")), for: $0) }.width(150).customizationID("last_activity").defaultVisibility(.hidden)
+        TableColumn("Availability") { stateColored(Text(displayColumn("availability", torrent: $0)), for: $0) }.width(80).customizationID("availability").defaultVisibility(.hidden)
+        TableColumn("Download Path") { stateColored(Text($0.column("download_path")), for: $0) }.width(220).customizationID("download_path").defaultVisibility(.hidden)
+        TableColumn("Infohash v1") { stateColored(Text($0.column("infohash_v1")), for: $0) }.width(260).customizationID("infohash_v1").defaultVisibility(.hidden)
+        TableColumn("Infohash v2") { stateColored(Text($0.column("infohash_v2")), for: $0) }.width(260).customizationID("infohash_v2").defaultVisibility(.hidden)
+        TableColumn("Reannounce") { stateColored(Text(displayColumn("reannounce", torrent: $0)), for: $0) }.width(90).customizationID("reannounce").defaultVisibility(.hidden)
+        TableColumn("Private") { stateColored(Text(displayColumn("private", torrent: $0)), for: $0) }.width(70).customizationID("private").defaultVisibility(.hidden)
+        TableColumn("Created On") { stateColored(Text($0.column("creation_date")), for: $0) }.width(150).customizationID("creation_date").defaultVisibility(.hidden)
     }
 
     private var detailsPane: some View {
@@ -1248,6 +1321,16 @@ struct ContentView: View {
             Spacer(minLength: 0)
             Text("\(torrents.count) torrents")
             Text("DHT: \(store.transferStatus.dhtNodes)")
+            if showFreeDiskSpace {
+                let freeSpace = store.serverStatistics?.free_space_on_disk.map {
+                    ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                } ?? "N/A"
+                Text("Free space: \(freeSpace)")
+            }
+            if showExternalIP {
+                Text(externalAddressText)
+                    .textSelection(.enabled)
+            }
             Label(store.transferStatus.downloadText, systemImage: "arrow.down")
             Label(store.transferStatus.uploadText, systemImage: "arrow.up")
         }
@@ -1255,6 +1338,14 @@ struct ContentView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
+    }
+
+    private var externalAddressText: String {
+        let addresses = [store.transferStatus.lastExternalAddressV4, store.transferStatus.lastExternalAddressV6]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        guard !addresses.isEmpty else { return "External IP: N/A" }
+        return addresses.count > 1 ? "External IPs: \(addresses.joined(separator: ", "))" : "External IP: \(addresses[0])"
     }
 
     private var trackerDetails: some View {
@@ -1425,7 +1516,7 @@ struct ContentView: View {
                     .padding(.vertical, 7)
                     Divider()
                     List(files, selection: $selectedFileIDs) { file in
-                        HStack(spacing: 12) {
+                        let row = HStack(spacing: 12) {
                             Text(file.name).lineLimit(1).frame(width: 520, alignment: .leading)
                             Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
                                 .frame(width: 100, alignment: .leading)
@@ -1439,6 +1530,9 @@ struct ContentView: View {
                         }
                         .font(.caption)
                         .tag(file.id)
+                        .onTapGesture(count: 2) {
+                            if let torrent = selectedTorrent { openTorrentFile(file, in: torrent) }
+                        }
                         .contextMenu {
                             if let torrent = selectedTorrent, isPreviewable(file) {
                                 Button("Preview File") { openTorrentFile(file, in: torrent) }
@@ -1446,6 +1540,14 @@ struct ContentView: View {
                             }
                             filePriorityActions(for: selectedFileIDs.contains(file.id) ? selectedFileIDs : [file.id])
                             Button("Rename…") { showDetailInput(.renameFile(file.name), title: "Rename File", hint: "File name", initialValue: (file.name as NSString).lastPathComponent) }
+                        }
+                        if dragContentFiles,
+                           store.usesBundledBackend,
+                           let torrent = selectedTorrent,
+                           torrentFileExists(file, in: torrent) {
+                            row.draggable(torrentFileURL(file, in: torrent))
+                        } else {
+                            row
                         }
                     }
                     .listStyle(.inset)
@@ -1742,10 +1844,12 @@ struct ContentView: View {
         }
         Button("Manage Trackers") { detailTab = .trackers }.disabled(hashes.count != 1)
         Button("Torrent Options…") { torrentOptionsTarget = TorrentOptionsTarget(hashes: hashes) }
-        Button("Preview File…") { previewTorrent = targetTorrent }
+        Button("Preview File…") {
+            if let targetTorrent { openPreviewOrDestination(for: targetTorrent) }
+        }
             .disabled(hashes.count != 1)
         Button("Open Destination Folder") {
-            if let targetTorrent, !targetTorrent.savePath.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: targetTorrent.savePath)) }
+            if let targetTorrent { openDestinationFolder(for: targetTorrent) }
         }
         .disabled(targetTorrent?.savePath.isEmpty ?? true)
         Menu("Queue") {
@@ -1786,7 +1890,7 @@ struct ContentView: View {
         }
         Button("Export .torrent…") { exportSelectedTorrent(hash: hashes.first) }.disabled(hashes.count != 1)
         Divider()
-        Button("Remove…", role: .destructive) { selectedTorrentIDs = target; showsRemoveConfirmation = true }
+        Button("Remove…", role: .destructive) { requestRemoval(hashes: Array(target)) }
     }
 
     private func runBulkAction(hashes: [String]? = nil, _ action: @escaping ([String]) async throws -> Void) {
@@ -1803,8 +1907,21 @@ struct ContentView: View {
         textAction = action
     }
 
+    private func requestRemoval(hashes: [String]) {
+        guard !hashes.isEmpty else { return }
+        selectedTorrentIDs = Set(hashes)
+        if confirmTorrentDeletion {
+            showsRemoveConfirmation = true
+        } else {
+            removeTorrents(hashes, deleteFiles: false)
+        }
+    }
+
     private func removeSelectedTorrent(deleteFiles: Bool) {
-        let hashes = selectedHashes
+        removeTorrents(selectedHashes, deleteFiles: deleteFiles)
+    }
+
+    private func removeTorrents(_ hashes: [String], deleteFiles: Bool) {
         guard !hashes.isEmpty else { return }
         Task {
             do {
@@ -1907,7 +2024,11 @@ struct ContentView: View {
             let completedExistingTorrents = incompleteDownloadIDs.isSubset(of: currentTorrents)
             incompleteDownloadIDs = []
             if completedExistingTorrents, downloadCompletionAction != "none" {
-                showsDownloadCompletionAction = true
+                if confirmAutoCompletionAction {
+                    showsDownloadCompletionAction = true
+                } else {
+                    performDownloadCompletionAction()
+                }
             }
         }
     }
@@ -2001,6 +2122,53 @@ struct ContentView: View {
         TorrentFilePreview.isPreviewable(file.name)
     }
 
+    private func handleTorrentDoubleClick(_ torrent: Torrent) {
+        guard selectedTorrentIDs.count == 1, selectedTorrentIDs.contains(torrent.id) else { return }
+        let actionValue = torrent.progress >= 1 ? completedDoubleClickAction : downloadingDoubleClickAction
+        let action = TorrentDoubleClickAction(rawValue: actionValue) ?? (torrent.progress >= 1 ? .openDestination : .toggleStop)
+        switch action {
+        case .toggleStop:
+            let command: TorrentCommand = ["stoppedUP", "stoppedDL"].contains(torrent.rawState) ? .start : .stop
+            runBulkAction(hashes: [torrent.id]) { try await store.command(command, hashes: $0) }
+        case .openDestination:
+            openDestinationFolder(for: torrent)
+        case .previewFile:
+            openPreviewOrDestination(for: torrent)
+        case .openOptions:
+            torrentOptionsTarget = TorrentOptionsTarget(hashes: [torrent.id])
+        case .none:
+            break
+        }
+    }
+
+    private func openDestinationFolder(for torrent: Torrent) {
+        guard store.usesBundledBackend else {
+            actionError = "The destination folder belongs to the remote server and cannot be opened in Finder."
+            return
+        }
+        guard !torrent.savePath.isEmpty else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: torrent.savePath, isDirectory: true))
+    }
+
+    private func openPreviewOrDestination(for torrent: Torrent) {
+        guard store.usesBundledBackend else {
+            actionError = "Files belong to the remote server and cannot be opened in Mac apps."
+            return
+        }
+        Task {
+            do {
+                let torrentFiles = try await store.files(for: torrent.id)
+                if torrentFiles.contains(where: isPreviewable) {
+                    previewTorrent = torrent
+                } else {
+                    openDestinationFolder(for: torrent)
+                }
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
     private func torrentFileURL(_ file: TorrentFile, in torrent: Torrent) -> URL {
         URL(fileURLWithPath: torrent.savePath, isDirectory: true).appending(path: file.name)
     }
@@ -2010,6 +2178,10 @@ struct ContentView: View {
     }
 
     private func openTorrentFile(_ file: TorrentFile, in torrent: Torrent) {
+        guard store.usesBundledBackend else {
+            actionError = "Files belong to the remote server and cannot be opened in Mac apps."
+            return
+        }
         let url = torrentFileURL(file, in: torrent)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         NSWorkspace.shared.open(url)

@@ -140,7 +140,9 @@ actor QBittorrentAPI {
             trackerDownloadRate: response.tracker_dl_speed ?? 0,
             trackerUploadRate: response.tracker_up_speed ?? 0,
             dhtNodes: response.dht_nodes ?? 0,
-            connectionStatus: response.connection_status ?? "disconnected"
+            connectionStatus: response.connection_status ?? "disconnected",
+            lastExternalAddressV4: response.last_external_address_v4,
+            lastExternalAddressV6: response.last_external_address_v6
         )
     }
 
@@ -768,6 +770,8 @@ private struct TorrentResponse: Decodable {
     let upspeed: Int64?
     let num_seeds: Int?
     let num_leechs: Int?
+    let num_complete: Int?
+    let num_incomplete: Int?
     let eta: Int64?
     let ratio: Double?
     let save_path: String?
@@ -798,6 +802,8 @@ private struct TorrentResponse: Decodable {
             uploadRateBytes: upspeed ?? 0,
             seeds: num_seeds ?? 0,
             peers: num_leechs ?? 0,
+            totalSeeds: num_complete,
+            totalPeers: num_incomplete,
             etaSeconds: eta ?? -1,
             ratio: ratio ?? 0,
             savePath: save_path ?? "",
@@ -865,6 +871,8 @@ private struct TransferResponse: Decodable {
     let tracker_up_speed: Int64?
     let dht_nodes: Int?
     let connection_status: String?
+    let last_external_address_v4: String?
+    let last_external_address_v6: String?
 }
 
 struct ServerStatistics: Decodable, Sendable {
@@ -874,6 +882,8 @@ struct ServerStatistics: Decodable, Sendable {
     let up_info_data: Int64?
     let total_wasted_session: Int64?
     let free_space_on_disk: Int64?
+    let last_external_address_v4: String?
+    let last_external_address_v6: String?
     let total_peer_connections: Int?
     let global_ratio: String?
     let read_cache_hits: String?

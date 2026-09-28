@@ -50,6 +50,8 @@ struct Torrent: Identifiable, Sendable {
     let uploadRateBytes: Int64
     let seeds: Int
     let peers: Int
+    let totalSeeds: Int?
+    let totalPeers: Int?
     let etaSeconds: Int64
     let ratio: Double
     let savePath: String
@@ -66,6 +68,14 @@ struct Torrent: Identifiable, Sendable {
     func column(_ key: String) -> String { extra[key] ?? "—" }
 
     var size: String { ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file) }
+    var seedCountText: String {
+        guard let totalSeeds, totalSeeds >= 0 else { return "\(seeds)" }
+        return "\(seeds) (\(totalSeeds))"
+    }
+    var peerCountText: String {
+        guard let totalPeers, totalPeers >= 0 else { return "\(peers)" }
+        return "\(peers) (\(totalPeers))"
+    }
     var downloadRate: String { Self.rate(downloadRateBytes) }
     var uploadRate: String { Self.rate(uploadRateBytes) }
     var eta: String {
@@ -180,6 +190,8 @@ struct TransferStatus: Sendable {
     var trackerUploadRate: Int64 = 0
     var dhtNodes: Int = 0
     var connectionStatus = "disconnected"
+    var lastExternalAddressV4: String?
+    var lastExternalAddressV6: String?
 
     static func rateText(_ bytes: Int64) -> String {
         bytes == 0 ? "0 B/s" : ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary) + "/s"

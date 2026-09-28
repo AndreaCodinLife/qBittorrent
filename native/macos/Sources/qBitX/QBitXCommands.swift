@@ -16,6 +16,7 @@ struct QBitXCommandActions {
     var moveSelectedToBottom: () -> Void
     var pauseSession: () -> Void
     var resumeSession: () -> Void
+    var showAppPreferences: () -> Void
     var showPreferences: () -> Void
     var showStatistics: () -> Void
     var showSpeedLimits: () -> Void
@@ -97,7 +98,9 @@ struct QBitXCommands: Commands {
         }
 
         CommandGroup(after: .appSettings) {
-            Button("qBittorrent Preferences…") { actions?.showPreferences() }
+            Button("qBitX Preferences…") { actions?.showAppPreferences() }
+                .keyboardShortcut(",", modifiers: .command)
+            Button("qBittorrent Server Preferences…") { actions?.showPreferences() }
                 .keyboardShortcut("o", modifiers: .option)
             Button("Speed Limits…") { actions?.showSpeedLimits() }
             Button("Statistics…") { actions?.showStatistics() }
